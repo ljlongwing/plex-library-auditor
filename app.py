@@ -485,52 +485,53 @@ def render_settings():
 
         if login_mode == "OAuth (Plex.tv)":
             if not st.session_state.plex_token:
-                st.info("Authenticate with your Plex.tv account to automatically discover servers.")
-                if st.button("Login with Plex", key="settings_login_btn"):
-                    try:
-                        pin_login, pin_id = plex.start_plex_auth()
-                        st.session_state.pin_login = pin_login
-                        st.session_state.pin_id = pin_id
-                        st.rerun()
-                    except Exception as e:
+                if st.session_state.pin_login is None:
+                    st.info("Authenticate with your Plex.tv account to automatically discover servers.")
+                    if st.button("Login with Plex", key="settings_login_btn"):
+                        try:
+                            pin_login, pin_id = plex.start_plex_auth()
+                            st.session_state.pin_login = pin_login
+                            st.session_state.pin_id = pin_id
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Failed to start Plex login: {e}")
+                else:
+                    st.markdown(f"### [Click here to authorize on Plex.tv]({st.session_state.pin_login.oauthUrl()})")
+                    st.caption("After authorizing, this page will detect it automatically.")
+                    if st.button("Cancel", key="cancel_login_btn"):
                         st.session_state.pin_login = None
                         st.session_state.pin_id = None
-                        st.error(f"Failed to start Plex login: {e}")
-                    
-                if st.session_state.pin_login is not None:
-                    st.markdown(f"### [1. Click here to Authorize]({st.session_state.pin_login.oauthUrl()})")
-                    st.write("### 2. Return here after authorizing")
-                    
-                    if st.button("Check Login Status"):
-                        try:
-                            token = plex.check_plex_pin(st.session_state.pin_id)
-                            if token:
-                                st.session_state.plex_token = token
-                                plex.save_setting('plex_token', token)
-                                st.session_state.pin_login = None
-                                st.session_state.pin_id = None
-                                st.rerun()
-                            else:
-                                st.warning("Not authorized yet — make sure you completed sign-in on the Plex tab before checking.")
-                        except Exception as e:
-                            st.error(f"Error checking login: {e}")
+                        st.rerun()
+
+                    # Auto-poll for authorization every 3 seconds
+                    try:
+                        import time
+                        time.sleep(3)
+                        token = plex.check_plex_pin(st.session_state.pin_id)
+                        if token:
+                            st.session_state.plex_token = token
+                            plex.save_setting('plex_token', token)
+                            st.session_state.pin_login = None
+                            st.session_state.pin_id = None
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Error checking authorization: {e}")
             else:
-                st.success(f"Authenticated as Plex User")
-                # Server Discovery
+                st.success("Authenticated with Plex.tv")
                 if not st.session_state.plex_url:
                     try:
-                        account = plex.get_plex_account(st.session_state.plex_token)
-                        resources = account.resources()
-                        servers = [r for r in resources if 'server' in r.provides and r.owned]
-                        
+                        with st.spinner("Discovering servers..."):
+                            account = plex.get_plex_account(st.session_state.plex_token)
+                            servers = [r for r in account.resources() if 'server' in r.provides and r.owned]
+
                         if not servers:
                             st.error("No owned Plex servers found on this account.")
                         elif len(servers) == 1:
-                            if st.button(f"Connect to {servers[0].name}"):
+                            with st.spinner(f"Connecting to {servers[0].name}..."):
                                 server = servers[0].connect()
                                 st.session_state.plex_url = server._baseurl
                                 plex.save_setting('plex_url', st.session_state.plex_url)
-                                st.rerun()
+                            st.rerun()
                         else:
                             server_names = [s.name for s in servers]
                             selected_server = st.selectbox("Select Plex Server", server_names)
