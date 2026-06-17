@@ -270,6 +270,25 @@ def get_automation_items(service_type, url=None, api_key=None):
         print(f"Error fetching {service_type} items: {e}")
         return []
 
+def test_automation_connection(service_type, url, api_key):
+    """Test connection to Radarr/Sonarr and return (items, error_message)."""
+    try:
+        endpoint = "movie" if service_type == "radarr" else "series"
+        res = requests.get(f"{url}/api/v3/{endpoint}", headers={"X-Api-Key": api_key}, timeout=10)
+        if res.status_code == 200:
+            return res.json(), None
+        return [], f"HTTP {res.status_code} — check your API key"
+    except requests.exceptions.ConnectionError:
+        return [], (
+            f"Could not connect to {url}. "
+            "If using a hostname (e.g. http://radarr/), the Docker container may not be able to resolve it. "
+            "Try using the service's IP address instead (e.g. http://192.168.1.x:7878)."
+        )
+    except requests.exceptions.Timeout:
+        return [], f"Connection to {url} timed out"
+    except Exception as e:
+        return [], str(e)
+
 def check_automation_status(external_id, service_type, all_items):
     """Checks status using a pre-fetched list of items.
     external_id is a TMDB ID for Radarr, or a TVDB ID for Sonarr.

@@ -612,13 +612,15 @@ def render_settings():
                     st.warning("Enter URL and Key first.")
                 else:
                     with st.spinner("Testing..."):
-                        items = plex.get_automation_items(service_name, url=url, api_key=key)
-                        if items:
+                        items, err = plex.test_automation_connection(service_name, url=url, api_key=key)
+                        if err:
+                            st.error(err)
+                        elif items:
                             st.success(f"Connected! Found {len(items)} items.")
                             if service_name == "radarr": st.cache_data.clear(get_cached_radarr_items)
                             else: st.cache_data.clear(get_cached_sonarr_items)
                         else:
-                            st.error("Connection failed or no items in library. Check URL and API key.")
+                            st.warning("Connected but library appears empty.")
 
         with col_save:
             if st.button(f"💾 Save {service_name.capitalize()}", use_container_width=True):
