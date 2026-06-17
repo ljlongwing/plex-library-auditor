@@ -495,11 +495,11 @@ def render_settings():
                             pin_login.run()
                         except Exception:
                             pass  # run() tries to open a browser; harmless failure in Docker
+                        st.rerun()
                     except Exception as e:
-                        st.error(f"Failed to start Plex login: {e}")
                         st.session_state.pin_login = None
                         st.session_state.pin_id = None
-                    st.rerun()
+                        st.error(f"Failed to start Plex login: {e}")
                     
                 if st.session_state.pin_login is not None:
                     st.markdown(f"### [1. Click here to Authorize]({st.session_state.pin_login.oauthUrl()})")
