@@ -55,6 +55,25 @@ class _RateLimiter:
 _tmdb_limiter = _RateLimiter(calls_per_second=20)
 
 
+def test_tmdb_connection(api_key):
+    """Test a TMDB API key. Returns (ok: bool, message: str)."""
+    try:
+        res = requests.get(
+            f"https://api.themoviedb.org/3/configuration?api_key={api_key}",
+            timeout=10,
+        )
+        if res.status_code == 200:
+            return True, "API key is valid"
+        if res.status_code == 401:
+            return False, "Invalid API key"
+        return False, f"Unexpected response: HTTP {res.status_code}"
+    except requests.exceptions.ConnectionError:
+        return False, "Could not reach api.themoviedb.org — check network connectivity"
+    except requests.exceptions.Timeout:
+        return False, "Connection to TMDB timed out"
+    except Exception as e:
+        return False, str(e)
+
 def _tmdb_get(url: str, timeout: int = 10, max_retries: int = 3):
     """Rate-limited TMDB GET with automatic retry on 429 responses."""
     for attempt in range(max_retries):

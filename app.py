@@ -588,10 +588,29 @@ def render_settings():
         st.subheader("TMDB Integration")
         st.write("Required for Series Auditor to identify collections and missing items.")
         curr_tmdb = st.text_input("TMDB API Key", value=st.session_state.tmdb_api_key or "", type="password")
-        if st.button("Save TMDB Key"):
-            st.session_state.tmdb_api_key = curr_tmdb
-            plex.save_setting('tmdb_api_key', curr_tmdb)
-            st.success("TMDB Key updated!")
+        col_test_tmdb, col_save_tmdb = st.columns(2)
+        with col_test_tmdb:
+            if st.button("🧪 Test TMDB Key", use_container_width=True):
+                if not curr_tmdb:
+                    st.warning("Enter an API key first.")
+                else:
+                    with st.spinner("Testing..."):
+                        ok, msg = plex.test_tmdb_connection(curr_tmdb)
+                    if ok:
+                        st.success(f"Connected — {msg}")
+                    else:
+                        st.error(msg)
+        with col_save_tmdb:
+            if st.button("💾 Save TMDB Key", use_container_width=True):
+                st.session_state.tmdb_api_key = curr_tmdb
+                plex.save_setting('tmdb_api_key', curr_tmdb)
+                st.success("TMDB Key saved!")
+        if st.session_state.tmdb_api_key:
+            ok, msg = plex.test_tmdb_connection(st.session_state.tmdb_api_key)
+            if ok:
+                st.caption("🟢 TMDB connected")
+            else:
+                st.caption(f"🔴 TMDB not connected — {msg}")
 
     st.divider()
     st.subheader("Media Automation (Radarr / Sonarr)")
