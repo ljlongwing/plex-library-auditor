@@ -1,0 +1,25 @@
+services:
+  plexwatched:
+    build: .
+    ports:
+      - "8501:8501"
+    volumes:
+      - ./data:/data
+    environment:
+      CACHE_DB_PATH: /data/cache.sqlite
+      # All settings below are optional — configure via the UI instead,
+      # or set here to pre-provision the container without touching the UI.
+      # Values set here are used as fallbacks when the DB has no saved value.
+      #
+      # PLEX_TOKEN: your-plex-token
+      # PLEX_URL: http://your-plex-server:32400
+      # TMDB_API_KEY: your-tmdb-key
+      # RADARR_URL: http://your-radarr:7878
+      # RADARR_API_KEY: your-radarr-key
+      # RADARR_PROFILE: "1"
+      # RADARR_FOLDER: /movies
+      # SONARR_URL: http://your-sonarr:8989
+      # SONARR_API_KEY: your-sonarr-key
+      # SONARR_PROFILE: "1"
+      # SONARR_FOLDER: /tv
+    restart: unless-stopped

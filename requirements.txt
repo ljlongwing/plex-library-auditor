@@ -1,0 +1,5 @@
+streamlit
+plexapi
+python-dotenv
+pandas
+requests
