@@ -131,6 +131,8 @@ if 'tmdb_api_key' not in st.session_state:
     st.session_state.tmdb_api_key = plex.get_setting('tmdb_api_key')
 if 'pin_login' not in st.session_state:
     st.session_state.pin_login = None
+if 'pin_id' not in st.session_state:
+    st.session_state.pin_id = None
 if 'filter_rules' not in st.session_state:
     st.session_state.filter_rules = []
 
@@ -486,11 +488,17 @@ def render_settings():
                 st.info("Authenticate with your Plex.tv account to automatically discover servers.")
                 if st.button("Login with Plex", key="settings_login_btn"):
                     try:
-                        st.session_state.pin_login = plex.start_plex_auth()
-                        st.session_state.pin_login.run()
+                        pin_login, pin_id = plex.start_plex_auth()
+                        st.session_state.pin_login = pin_login
+                        st.session_state.pin_id = pin_id
+                        try:
+                            pin_login.run()
+                        except Exception:
+                            pass  # run() tries to open a browser; harmless failure in Docker
                     except Exception as e:
                         st.error(f"Failed to start Plex login: {e}")
                         st.session_state.pin_login = None
+                        st.session_state.pin_id = None
                     st.rerun()
                     
                 if st.session_state.pin_login:
@@ -499,11 +507,12 @@ def render_settings():
                     
                     if st.button("Check Login Status"):
                         try:
-                            token = plex.check_plex_pin(st.session_state.pin_login)
+                            token = plex.check_plex_pin(st.session_state.pin_id)
                             if token:
                                 st.session_state.plex_token = token
                                 plex.save_setting('plex_token', token)
                                 st.session_state.pin_login = None
+                                st.session_state.pin_id = None
                                 st.rerun()
                             else:
                                 st.warning("Not authorized yet — make sure you completed sign-in on the Plex tab before checking.")

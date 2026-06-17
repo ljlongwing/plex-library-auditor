@@ -456,7 +456,11 @@ def get_setting(key):
     return os.environ.get(key.upper())
 
 def start_plex_auth():
-    """Starts the OAuth PIN flow with consistent headers."""
+    """Starts the OAuth PIN flow. Returns (pin_login, pin_id) tuple.
+
+    pin_id is extracted at creation time because the attribute name has changed
+    across plexapi versions and may not be reliably accessible later.
+    """
     client_id = get_client_id()
     headers = {
         'X-Plex-Product': APP_NAME,
@@ -464,9 +468,19 @@ def start_plex_auth():
         'X-Plex-Version': '1.0.0'
     }
     pin_login = MyPlexPinLogin(headers=headers, oauth=True)
-    return pin_login
+    pin_id = (
+        getattr(pin_login, 'id', None)
+        or getattr(pin_login, '_id', None)
+        or (getattr(pin_login, '_data', None) or {}).get('id')
+    )
+    if not pin_id:
+        raise RuntimeError(
+            f"Could not find PIN ID on MyPlexPinLogin. "
+            f"Available attributes: {[a for a in dir(pin_login) if not a.startswith('__')]}"
+        )
+    return pin_login, pin_id
 
-def check_plex_pin(pin_login):
+def check_plex_pin(pin_id):
     """Directly poll plex.tv to check if the OAuth PIN has been authorized.
 
     plexapi's checkLogin() only reads cached thread state, which is unreliable
@@ -480,15 +494,12 @@ def check_plex_pin(pin_login):
         'X-Plex-Version': '1.0.0',
     }
     resp = requests.get(
-        f'https://plex.tv/api/v2/pins/{pin_login.id}',
+        f'https://plex.tv/api/v2/pins/{pin_id}',
         headers=headers,
         timeout=10,
     )
     resp.raise_for_status()
-    token = resp.json().get('authToken')
-    if token:
-        pin_login.token = token
-    return token
+    return resp.json().get('authToken')
 
 def get_plex_account(token):
     return MyPlexAccount(token=token)
