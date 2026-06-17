@@ -17,8 +17,8 @@ A Streamlit web app for auditing your Plex library — surface unwatched content
 ## Quick Start — Docker (recommended)
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/plexwatched.git
-cd plexwatched
+git clone https://github.com/ljlongwing/plex-library-auditor.git
+cd plex-library-auditor
 docker compose up -d
 ```
 
@@ -60,8 +60,8 @@ Or set the variables directly in the `environment:` block — the commented-out 
 ### Setup
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/plexwatched.git
-cd plexwatched
+git clone https://github.com/ljlongwing/plex-library-auditor.git
+cd plex-library-auditor
 
 # use the launch script (handles venv + .env creation automatically)
 ./launch.sh
