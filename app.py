@@ -475,11 +475,12 @@ def render_settings():
     col_conn, col_tmdb = st.columns(2)
     
     with col_conn:
-        st.subheader("Plex Connection")
+        _plx_h, _plx_s = st.columns([3, 1], vertical_alignment="center")
+        _plx_h.subheader("Plex Connection")
         if st.session_state.plex_token and st.session_state.plex_url:
-            st.caption(f"🟢 Connected — `{st.session_state.plex_url}`")
+            _plx_s.markdown("🟢 Connected")
         else:
-            st.caption("🔴 Not connected")
+            _plx_s.markdown("🔴 Not connected")
 
         # Connection Mode selection
         login_mode = st.radio("Connection Mode", ["OAuth (Plex.tv)", "Manual (Direct IP)"], horizontal=True)
@@ -544,21 +545,19 @@ def render_settings():
                     except Exception as e:
                         st.error(f"Error discovering servers: {e}")
                 else:
-                    st.caption(f"🟢 Connected — `{st.session_state.plex_url}`")
-                    if st.button("Change Server / Re-discover"):
-                        st.session_state.plex_url = None
-                        plex.save_setting('plex_url', None)
-                        st.rerun()
-            
-            # Show logout button regardless of OAuth/Manual if connected
-            if st.session_state.plex_token:
-                st.divider()
-                if st.button("🛑 Logout / Disconnect", use_container_width=True):
-                    st.session_state.plex_token = None
-                    st.session_state.plex_url = None
-                    plex.save_setting('plex_token', None)
-                    plex.save_setting('plex_url', None)
-                    st.rerun()
+                    _ch, _cl = st.columns(2)
+                    with _ch:
+                        if st.button("Change Server / Re-discover", use_container_width=True):
+                            st.session_state.plex_url = None
+                            plex.save_setting('plex_url', None)
+                            st.rerun()
+                    with _cl:
+                        if st.button("🛑 Logout / Disconnect", use_container_width=True, key="oauth_logout"):
+                            st.session_state.plex_token = None
+                            st.session_state.plex_url = None
+                            plex.save_setting('plex_token', None)
+                            plex.save_setting('plex_url', None)
+                            st.rerun()
         else:
             # Manual Mode
             manual_url = st.text_input("Server URL", value=st.session_state.plex_url or "http://192.168.1.X:32400")
@@ -577,7 +576,6 @@ def render_settings():
                     st.rerun()
             
             if st.session_state.plex_token:
-                st.divider()
                 if st.button("🛑 Logout / Disconnect", key="manual_logout", use_container_width=True):
                     st.session_state.plex_token = None
                     st.session_state.plex_url = None
@@ -586,7 +584,14 @@ def render_settings():
                     st.rerun()
 
     with col_tmdb:
-        st.subheader("TMDB Integration")
+        _tmdb_h, _tmdb_s = st.columns([3, 1], vertical_alignment="center")
+        _tmdb_h.subheader("TMDB Integration")
+        if st.session_state.tmdb_api_key:
+            _tmdb_ok, _ = plex.test_tmdb_connection(st.session_state.tmdb_api_key)
+            _tmdb_s.markdown("🟢 Connected" if _tmdb_ok else "🔴 Not connected")
+        else:
+            _tmdb_s.markdown("⚪ Not configured")
+
         st.write("Required for Series Auditor to identify collections and missing items.")
         curr_tmdb = st.text_input("TMDB API Key", value=st.session_state.tmdb_api_key or "", type="password")
         col_test_tmdb, col_save_tmdb = st.columns(2)
@@ -606,12 +611,6 @@ def render_settings():
                 st.session_state.tmdb_api_key = curr_tmdb
                 plex.save_setting('tmdb_api_key', curr_tmdb)
                 st.success("TMDB Key saved!")
-        if st.session_state.tmdb_api_key:
-            ok, msg = plex.test_tmdb_connection(st.session_state.tmdb_api_key)
-            if ok:
-                st.caption("🟢 TMDB connected")
-            else:
-                st.caption(f"🔴 TMDB not connected — {msg}")
 
     st.divider()
     st.subheader("Media Automation (Radarr / Sonarr)")
@@ -621,7 +620,16 @@ def render_settings():
     
     # Helper to render automation section
     def render_auto_config(service_name, configs):
-        st.markdown(f"#### {service_name.capitalize()}")
+        _svc_h, _svc_s = st.columns([3, 1], vertical_alignment="center")
+        _svc_h.markdown(f"#### {service_name.capitalize()}")
+        _saved_url = plex.get_setting(f"{service_name}_url")
+        _saved_key = plex.get_setting(f"{service_name}_api_key")
+        if _saved_url and _saved_key:
+            _svc_items = get_cached_radarr_items() if service_name == "radarr" else get_cached_sonarr_items()
+            _svc_s.markdown("🟢 Connected" if _svc_items else "🔴 Not connected")
+        else:
+            _svc_s.markdown("⚪ Not configured")
+
         url = st.text_input(f"{service_name.capitalize()} URL", value=plex.get_setting(f"{service_name}_url") or "", placeholder="http://192.168.1.50:7878")
         key = st.text_input(f"{service_name.capitalize()} API Key", value=plex.get_setting(f"{service_name}_api_key") or "", type="password")
 
@@ -650,17 +658,6 @@ def render_settings():
                 get_cached_radarr_configs.clear()
                 get_cached_sonarr_configs.clear()
                 st.success("Core settings saved!")
-
-        saved_url = plex.get_setting(f"{service_name}_url")
-        saved_key = plex.get_setting(f"{service_name}_api_key")
-        if saved_url and saved_key:
-            items = service_name == "radarr" and get_cached_radarr_items() or get_cached_sonarr_items()
-            if items:
-                st.caption(f"🟢 Connected — {len(items)} items in library")
-            else:
-                st.caption(f"🔴 Not connected or library is empty — use Test to diagnose")
-        else:
-            st.caption("⚪ Not configured")
 
         if configs["profiles"] and configs["folders"]:
             st.divider()
@@ -692,7 +689,14 @@ def render_settings():
         render_auto_config("sonarr", get_cached_sonarr_configs())
 
     st.divider()
-    st.subheader("Tautulli Integration")
+    _taut_h, _taut_s = st.columns([3, 1], vertical_alignment="center")
+    _taut_h.subheader("Tautulli Integration")
+    _saved_taut = plex.get_setting("tautulli_url") and plex.get_setting("tautulli_api_key")
+    if _saved_taut:
+        _taut_users = get_cached_tautulli_users()
+        _taut_s.markdown("🟢 Connected" if _taut_users else "🔴 Not connected")
+    else:
+        _taut_s.markdown("⚪ Not configured")
     st.write("Enables per-user watch history filtering in the Library Audit rule builder.")
     col_taut1, col_taut2 = st.columns(2)
     with col_taut1:
@@ -719,17 +723,6 @@ def render_settings():
             plex.save_setting("tautulli_api_key", tautulli_key)
             get_cached_tautulli_users.clear()
             st.success("Tautulli settings saved!")
-
-    saved_taut_url = plex.get_setting("tautulli_url")
-    saved_taut_key = plex.get_setting("tautulli_api_key")
-    if saved_taut_url and saved_taut_key:
-        users = get_cached_tautulli_users()
-        if users:
-            st.caption(f"🟢 Connected — {len(users)} users available")
-        else:
-            st.caption("🔴 Not connected or no users found — use Test to diagnose")
-    else:
-        st.caption("⚪ Not configured")
 
     st.divider()
     st.subheader("Data & Persistence")
