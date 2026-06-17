@@ -4,6 +4,9 @@ services:
     ports:
       - "8501:8501"
     volumes:
+      # Format: /host/path:/container/path
+      # - Change the LEFT side to wherever you want to store the database on your system
+      # - Leave the RIGHT side (/data) exactly as-is — it is the internal container path
       - ./data:/data
     environment:
       CACHE_DB_PATH: /data/cache.sqlite
