@@ -250,6 +250,9 @@ def get_automation_configs(service_type):
         print(f"Error fetching {service_type} configs: {e}")
         return {"profiles": [], "folders": []}
 
+def _automation_url(base_url, service_type):
+    return f"{base_url.rstrip('/')}/api/v3/{'movie' if service_type == 'radarr' else 'series'}"
+
 def get_automation_items(service_type, url=None, api_key=None):
     """Fetches all items from Radarr or Sonarr for cached status checking.
     url and api_key override saved settings when provided (e.g. for connection testing).
@@ -263,8 +266,7 @@ def get_automation_items(service_type, url=None, api_key=None):
         return []
 
     try:
-        endpoint = "movie" if service_type == "radarr" else "series"
-        res = requests.get(f"{url}/api/v3/{endpoint}", headers={"X-Api-Key": api_key}, timeout=10)
+        res = requests.get(_automation_url(url, service_type), headers={"X-Api-Key": api_key}, timeout=10)
         return res.json() if res.status_code == 200 else []
     except Exception as e:
         print(f"Error fetching {service_type} items: {e}")
@@ -273,17 +275,12 @@ def get_automation_items(service_type, url=None, api_key=None):
 def test_automation_connection(service_type, url, api_key):
     """Test connection to Radarr/Sonarr and return (items, error_message)."""
     try:
-        endpoint = "movie" if service_type == "radarr" else "series"
-        res = requests.get(f"{url}/api/v3/{endpoint}", headers={"X-Api-Key": api_key}, timeout=10)
+        res = requests.get(_automation_url(url, service_type), headers={"X-Api-Key": api_key}, timeout=10)
         if res.status_code == 200:
             return res.json(), None
         return [], f"HTTP {res.status_code} — check your API key"
     except requests.exceptions.ConnectionError:
-        return [], (
-            f"Could not connect to {url}. "
-            "If using a hostname (e.g. http://radarr/), the Docker container may not be able to resolve it. "
-            "Try using the service's IP address instead (e.g. http://192.168.1.x:7878)."
-        )
+        return [], f"Could not connect to {url} — check the URL and that the service is reachable"
     except requests.exceptions.Timeout:
         return [], f"Connection to {url} timed out"
     except Exception as e:
