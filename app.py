@@ -376,10 +376,7 @@ def main_dashboard():
     with col_t1:
         st.markdown("# 🎬 Plex Library Auditor")
     with col_t2:
-        if st.session_state.plex_token and st.session_state.plex_url:
-            st.markdown("<p style='color: #28a745; font-weight: bold; margin-bottom: 0;'>Connected ✅</p>", unsafe_allow_html=True)
-        else:
-            st.markdown("<p style='color: #dc3545; font-weight: bold; margin-bottom: 0;'>Disconnected ❌</p>", unsafe_allow_html=True)
+        pass
 
     # Header Area - Row 2: Refresh and Progress
     col_r1, col_r2, col_r3 = st.columns([1.5, 8, 1], vertical_alignment="center")
@@ -479,7 +476,11 @@ def render_settings():
     
     with col_conn:
         st.subheader("Plex Connection")
-        
+        if st.session_state.plex_token and st.session_state.plex_url:
+            st.caption(f"🟢 Connected — `{st.session_state.plex_url}`")
+        else:
+            st.caption("🔴 Not connected")
+
         # Connection Mode selection
         login_mode = st.radio("Connection Mode", ["OAuth (Plex.tv)", "Manual (Direct IP)"], horizontal=True)
 
@@ -543,7 +544,7 @@ def render_settings():
                     except Exception as e:
                         st.error(f"Error discovering servers: {e}")
                 else:
-                    st.write(f"**Connected URL:** `{st.session_state.plex_url}`")
+                    st.caption(f"🟢 Connected — `{st.session_state.plex_url}`")
                     if st.button("Change Server / Re-discover"):
                         st.session_state.plex_url = None
                         plex.save_setting('plex_url', None)
@@ -649,6 +650,17 @@ def render_settings():
                 get_cached_radarr_configs.clear()
                 get_cached_sonarr_configs.clear()
                 st.success("Core settings saved!")
+
+        saved_url = plex.get_setting(f"{service_name}_url")
+        saved_key = plex.get_setting(f"{service_name}_api_key")
+        if saved_url and saved_key:
+            items = service_name == "radarr" and get_cached_radarr_items() or get_cached_sonarr_items()
+            if items:
+                st.caption(f"🟢 Connected — {len(items)} items in library")
+            else:
+                st.caption(f"🔴 Not connected or library is empty — use Test to diagnose")
+        else:
+            st.caption("⚪ Not configured")
 
         if configs["profiles"] and configs["folders"]:
             st.divider()
@@ -1103,39 +1115,13 @@ def render_series_auditor():
         st.warning("Please enter a TMDB API Key in the Settings tab to use the Series Auditor.")
         return
 
-    # Fetch automation status before layout so both columns can reference it
     radarr_items = get_cached_radarr_items()
     sonarr_items = get_cached_sonarr_items()
-    radarr_ok = len(radarr_items) > 0 or (plex.get_setting("radarr_url") and plex.get_setting("radarr_api_key"))
-    sonarr_ok = len(sonarr_items) > 0 or (plex.get_setting("sonarr_url") and plex.get_setting("sonarr_api_key"))
 
-    scan_col, status_col = st.columns(2)
-
-    with scan_col:
-        with st.container(border=True):
-            st.markdown("**Scan Library**")
-            st.caption("Enrich metadata from TMDB to identify collection gaps.")
-            scan_clicked = st.button("🔍 Scan for Missing Series Items", use_container_width=True)
-
-    with status_col:
-        with st.container(border=True):
-            st.markdown("**Automation Status**")
-            r_cls = "ok" if radarr_ok else "err"
-            s_cls = "ok" if sonarr_ok else "err"
-            r_icon = "✅" if radarr_ok else "❌"
-            s_icon = "✅" if sonarr_ok else "❌"
-            st.markdown(
-                f'<span class="stat-pill {r_cls}">{r_icon} Radarr</span>&nbsp;&nbsp;'
-                f'<span class="stat-pill {s_cls}">{s_icon} Sonarr</span>',
-                unsafe_allow_html=True
-            )
-            if not (radarr_ok or sonarr_ok):
-                st.caption("Configure Radarr/Sonarr in **Settings** to enable direct requests.")
-            else:
-                if st.button("🔄 Refresh Status", key="refresh_auto_cache"):
-                    get_cached_radarr_items.clear()
-                    get_cached_sonarr_items.clear()
-                    st.rerun()
+    with st.container(border=True):
+        st.markdown("**Scan Library**")
+        st.caption("Enrich metadata from TMDB to identify collection gaps.")
+        scan_clicked = st.button("🔍 Scan for Missing Series Items", use_container_width=True)
 
     if scan_clicked:
         progress_bar = st.progress(0)
