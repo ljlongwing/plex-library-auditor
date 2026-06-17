@@ -499,11 +499,14 @@ def render_settings():
                     
                     if st.button("Check Login Status"):
                         try:
-                            if st.session_state.pin_login.checkLogin():
-                                st.session_state.plex_token = st.session_state.pin_login.token
-                                plex.save_setting('plex_token', st.session_state.plex_token)
+                            token = plex.check_plex_pin(st.session_state.pin_login)
+                            if token:
+                                st.session_state.plex_token = token
+                                plex.save_setting('plex_token', token)
                                 st.session_state.pin_login = None
                                 st.rerun()
+                            else:
+                                st.warning("Not authorized yet — make sure you completed sign-in on the Plex tab before checking.")
                         except Exception as e:
                             st.error(f"Error checking login: {e}")
             else:

@@ -466,6 +466,30 @@ def start_plex_auth():
     pin_login = MyPlexPinLogin(headers=headers, oauth=True)
     return pin_login
 
+def check_plex_pin(pin_login):
+    """Directly poll plex.tv to check if the OAuth PIN has been authorized.
+
+    plexapi's checkLogin() only reads cached thread state, which is unreliable
+    in headless/Docker environments. This makes a fresh request instead.
+    """
+    client_id = get_client_id()
+    headers = {
+        'Accept': 'application/json',
+        'X-Plex-Product': APP_NAME,
+        'X-Plex-Client-Identifier': client_id,
+        'X-Plex-Version': '1.0.0',
+    }
+    resp = requests.get(
+        f'https://plex.tv/api/v2/pins/{pin_login.id}',
+        headers=headers,
+        timeout=10,
+    )
+    resp.raise_for_status()
+    token = resp.json().get('authToken')
+    if token:
+        pin_login.token = token
+    return token
+
 def get_plex_account(token):
     return MyPlexAccount(token=token)
 
