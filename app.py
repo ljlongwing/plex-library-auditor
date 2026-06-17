@@ -388,8 +388,11 @@ def main_dashboard():
         if refresh_state["running"]:
             overall = refresh_state["overall_msg"]
             item = refresh_state["item_msg"]
-            msg = f"⏳ {overall} | {item}" if item else f"⏳ {overall}"
-            progress_placeholder.markdown(f"<span class='progress-text'>{msg}</span>", unsafe_allow_html=True)
+            if item:
+                msg = f"<span class='progress-text'>⏳ {overall}</span><br><span style='font-size:0.82em;opacity:0.75;'>{item}</span>"
+            else:
+                msg = f"<span class='progress-text'>⏳ {overall}</span>"
+            progress_placeholder.markdown(msg, unsafe_allow_html=True)
         elif refresh_state["done"]:
             if refresh_state["error"]:
                 progress_placeholder.markdown(f"<span class='progress-text'>❌ Refresh failed: {refresh_state['error']}</span>", unsafe_allow_html=True)
@@ -680,13 +683,21 @@ def render_settings():
                 prof_id = next(p["id"] for p in profiles if p["name"] == sel_prof)
                 plex.save_setting(f"{service_name}_profile", str(prof_id))
                 plex.save_setting(f"{service_name}_folder", sel_fold)
+                get_radarr_profile_max_res.clear()
+                get_sonarr_profile_max_res.clear()
                 st.success("Defaults updated!")
 
     with col_radarr:
-        render_auto_config("radarr", get_cached_radarr_configs())
+        render_auto_config("radarr", get_cached_radarr_configs(
+            url=plex.get_setting("radarr_url") or "",
+            key=plex.get_setting("radarr_api_key") or "",
+        ))
 
     with col_sonarr:
-        render_auto_config("sonarr", get_cached_sonarr_configs())
+        render_auto_config("sonarr", get_cached_sonarr_configs(
+            url=plex.get_setting("sonarr_url") or "",
+            key=plex.get_setting("sonarr_api_key") or "",
+        ))
 
     st.divider()
     _taut_h, _taut_s = st.columns([3, 1], vertical_alignment="center")
@@ -901,11 +912,11 @@ def render_library_audit():
         _upgrade_mask = pd.Series(False, index=filtered_df.index)
         _res_px = filtered_df['resolution'].fillna('').str.lower().map(lambda r: _PLEX_RES_PX.get(r, 0))
         if _radarr_configured:
-            _radarr_max = get_radarr_profile_max_res()
+            _radarr_max = get_radarr_profile_max_res(plex.get_setting("radarr_profile") or "")
             if _radarr_max > 0:
                 _upgrade_mask |= (filtered_df['type'] == 'movie') & (_res_px < _radarr_max)
         if _sonarr_configured:
-            _sonarr_max = get_sonarr_profile_max_res()
+            _sonarr_max = get_sonarr_profile_max_res(plex.get_setting("sonarr_profile") or "")
             if _sonarr_max > 0:
                 _upgrade_mask |= (filtered_df['type'] == 'show') & (_res_px < _sonarr_max)
         filtered_df = filtered_df[_upgrade_mask]
@@ -1016,8 +1027,8 @@ def render_library_audit():
                 selected_items = display_df.iloc[selected_indices]
 
                 # Determine which selected items can be upgraded via Radarr (movies) or Sonarr (shows)
-                _radarr_max = get_radarr_profile_max_res() if _radarr_configured else 0
-                _sonarr_max = get_sonarr_profile_max_res() if _sonarr_configured else 0
+                _radarr_max = get_radarr_profile_max_res(plex.get_setting("radarr_profile") or "") if _radarr_configured else 0
+                _sonarr_max = get_sonarr_profile_max_res(plex.get_setting("sonarr_profile") or "") if _sonarr_configured else 0
                 upgradeable_movies = []
                 upgradeable_shows = []
                 for _, row in selected_items.iterrows():
@@ -1092,21 +1103,19 @@ def get_cached_sonarr_items():
     return plex.get_automation_items("sonarr")
 
 @st.cache_data(ttl=300)
-def get_cached_radarr_configs():
+def get_cached_radarr_configs(url="", key=""):
     return plex.get_automation_configs("radarr")
 
 @st.cache_data(ttl=300)
-def get_cached_sonarr_configs():
+def get_cached_sonarr_configs(url="", key=""):
     return plex.get_automation_configs("sonarr")
 
 @st.cache_data(ttl=300)
-def get_radarr_profile_max_res():
-    profile_id = plex.get_setting("radarr_profile")
+def get_radarr_profile_max_res(profile_id=""):
     return plex.get_radarr_profile_max_resolution(profile_id)
 
 @st.cache_data(ttl=300)
-def get_sonarr_profile_max_res():
-    profile_id = plex.get_setting("sonarr_profile")
+def get_sonarr_profile_max_res(profile_id=""):
     return plex.get_sonarr_profile_max_resolution(profile_id)
 
 @st.cache_data

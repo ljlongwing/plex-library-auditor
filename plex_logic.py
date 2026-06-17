@@ -104,6 +104,7 @@ def start_background_refresh(plex_url, plex_token):
         with _state_lock:
             if is_overall:
                 _refresh_state["overall_msg"] = msg
+                _refresh_state["item_msg"] = ""
             else:
                 _refresh_state["item_msg"] = msg
 
@@ -342,10 +343,14 @@ def get_radarr_profile_max_resolution(profile_id):
         for item in profile.get("items", []):
             if not item.get("allowed"):
                 continue
-            # Radarr may nest qualities inside groups; check item["items"] first
-            qualities = item.get("items") or [item.get("quality", {})]
-            for q in qualities:
-                max_res = max(max_res, q.get("resolution", 0))
+            sub_items = item.get("items") or []
+            if sub_items:
+                # Group: items are nested one level deeper, each with a "quality" key
+                for sub in sub_items:
+                    if sub.get("allowed") is not False:
+                        max_res = max(max_res, sub.get("quality", {}).get("resolution", 0))
+            else:
+                max_res = max(max_res, item.get("quality", {}).get("resolution", 0))
         return max_res
     except Exception:
         return 0
@@ -388,9 +393,13 @@ def get_sonarr_profile_max_resolution(profile_id):
         for item in profile.get("items", []):
             if not item.get("allowed"):
                 continue
-            qualities = item.get("items") or [item.get("quality", {})]
-            for q in qualities:
-                max_res = max(max_res, q.get("resolution", 0))
+            sub_items = item.get("items") or []
+            if sub_items:
+                for sub in sub_items:
+                    if sub.get("allowed") is not False:
+                        max_res = max(max_res, sub.get("quality", {}).get("resolution", 0))
+            else:
+                max_res = max(max_res, item.get("quality", {}).get("resolution", 0))
         return max_res
     except Exception:
         return 0
@@ -687,9 +696,10 @@ def fetch_and_cache_data(plex_url, plex_token, progress_callback=None):
     for section in valid_sections:
         current_section += 1
         overall_pct = (current_section - 1) / total_sections
+        sec_prefix = f"Library {current_section}/{total_sections}: {section.title}"
         if progress_callback:
-            progress_callback(f"Library {current_section}/{total_sections}: {section.title}", overall_pct, is_overall=True)
-            
+            progress_callback(f"{sec_prefix} — fetching item list...", overall_pct, is_overall=True)
+
         # Bulk fetch with GUIDs. includeCollections=1 does NOT embed <Collection> child
         # elements in the section listing XML — those only appear in full item metadata.
         # We fetch collection membership separately below via the collections endpoint.
@@ -709,8 +719,12 @@ def fetch_and_cache_data(plex_url, plex_token, progress_callback=None):
         for item in items:
             item._autoReload = False
 
+        total_items = len(items)
+
         # Build ratingKey → [collection names] map for this section.
         # One call per section (not per item) via the collections endpoint.
+        if progress_callback:
+            progress_callback(f"{sec_prefix} — building collection map ({total_items} items)...", overall_pct, is_overall=True)
         collection_map = {}
         try:
             colls_data = section._server.query(f"/library/sections/{section.key}/collections")
@@ -726,17 +740,19 @@ def fetch_and_cache_data(plex_url, plex_token, progress_callback=None):
         except Exception as e:
             print(f"Could not fetch collections for section '{section.title}': {e}")
 
-        total_items = len(items)
-        
+        if progress_callback:
+            progress_callback(f"{sec_prefix} (0/{total_items})", overall_pct, is_overall=True)
+
         # To speed up TV shows, we parallelize episode fetching
         if section.type == 'show':
             with ThreadPoolExecutor(max_workers=10) as executor:
                 future_to_item = {executor.submit(process_show_episodes, item, global_history): item for item in items}
-                
+
                 for idx, future in enumerate(as_completed(future_to_item)):
                     item = future_to_item[future]
                     if progress_callback and idx % 10 == 0:
-                        progress_callback(f"({idx}/{total_items}) Processing: {item.title}", idx / total_items if total_items > 0 else 0)
+                        progress_callback(f"{sec_prefix} ({idx}/{total_items})", overall_pct, is_overall=True)
+                        progress_callback(f"Processing: {item.title}", idx / total_items if total_items > 0 else 0)
                     
                     try:
                         viewed_count, leaf_count, size_bytes, latest_added_at, resolution, last_watched = future.result()
@@ -789,7 +805,8 @@ def fetch_and_cache_data(plex_url, plex_token, progress_callback=None):
                 for idx, future in enumerate(as_completed(future_to_item)):
                     item = future_to_item[future]
                     if progress_callback and idx % 20 == 0:
-                        progress_callback(f"({idx}/{total_items}) Processing: {item.title}", idx / total_items if total_items > 0 else 0)
+                        progress_callback(f"{sec_prefix} ({idx}/{total_items})", overall_pct, is_overall=True)
+                        progress_callback(f"Processing: {item.title}", idx / total_items if total_items > 0 else 0)
                     try:
                         all_data.append(future.result())
                     except Exception as e:
