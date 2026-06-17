@@ -720,6 +720,17 @@ def render_settings():
             get_cached_tautulli_users.clear()
             st.success("Tautulli settings saved!")
 
+    saved_taut_url = plex.get_setting("tautulli_url")
+    saved_taut_key = plex.get_setting("tautulli_api_key")
+    if saved_taut_url and saved_taut_key:
+        users = get_cached_tautulli_users()
+        if users:
+            st.caption(f"🟢 Connected — {len(users)} users available")
+        else:
+            st.caption("🔴 Not connected or no users found — use Test to diagnose")
+    else:
+        st.caption("⚪ Not configured")
+
     st.divider()
     st.subheader("Data & Persistence")
     col_d1, col_d2 = st.columns(2)
