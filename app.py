@@ -501,7 +501,7 @@ def render_settings():
                         st.session_state.pin_id = None
                     st.rerun()
                     
-                if st.session_state.pin_login:
+                if st.session_state.pin_login is not None:
                     st.markdown(f"### [1. Click here to Authorize]({st.session_state.pin_login.oauthUrl()})")
                     st.write("### 2. Return here after authorizing")
                     
