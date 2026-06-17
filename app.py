@@ -485,8 +485,12 @@ def render_settings():
             if not st.session_state.plex_token:
                 st.info("Authenticate with your Plex.tv account to automatically discover servers.")
                 if st.button("Login with Plex", key="settings_login_btn"):
-                    st.session_state.pin_login = plex.start_plex_auth()
-                    st.session_state.pin_login.run()
+                    try:
+                        st.session_state.pin_login = plex.start_plex_auth()
+                        st.session_state.pin_login.run()
+                    except Exception as e:
+                        st.error(f"Failed to start Plex login: {e}")
+                        st.session_state.pin_login = None
                     st.rerun()
                     
                 if st.session_state.pin_login:
