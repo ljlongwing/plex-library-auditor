@@ -256,19 +256,18 @@ def get_automation_configs(service_type):
     if not url or not api_key:
         return {"profiles": [], "folders": []}
     
+    base = url.rstrip('/')
     try:
-        # Fetch Profiles
-        p_res = requests.get(f"{url}/api/v3/qualityprofile", headers={"X-Api-Key": api_key}, timeout=10)
+        p_res = requests.get(f"{base}/api/v3/qualityprofile", headers={"X-Api-Key": api_key}, timeout=10)
         profiles = [{"id": p["id"], "name": p["name"]} for p in p_res.json()] if p_res.status_code == 200 else []
 
-        # Fetch Folders
-        f_res = requests.get(f"{url}/api/v3/rootfolder", headers={"X-Api-Key": api_key}, timeout=10)
+        f_res = requests.get(f"{base}/api/v3/rootfolder", headers={"X-Api-Key": api_key}, timeout=10)
         folders = [{"path": f["path"], "accessible": f["accessible"]} for f in f_res.json()] if f_res.status_code == 200 else []
-        
-        return {"profiles": profiles, "folders": folders}
+
+        return {"profiles": profiles, "folders": folders, "error": None}
     except Exception as e:
         print(f"Error fetching {service_type} configs: {e}")
-        return {"profiles": [], "folders": []}
+        return {"profiles": [], "folders": [], "error": str(e)}
 
 def _automation_url(base_url, service_type):
     return f"{base_url.rstrip('/')}/api/v3/{'movie' if service_type == 'radarr' else 'series'}"

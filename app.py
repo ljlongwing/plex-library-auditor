@@ -662,30 +662,43 @@ def render_settings():
                 get_cached_sonarr_configs.clear()
                 st.success("Core settings saved!")
 
-        if configs["profiles"] and configs["folders"]:
+        _saved_url = plex.get_setting(f"{service_name}_url")
+        _saved_key = plex.get_setting(f"{service_name}_api_key")
+        if _saved_url and _saved_key:
             st.divider()
-            profiles = configs["profiles"]
-            folders = configs["folders"]
-            
-            curr_prof = plex.get_setting(f"{service_name}_profile")
-            curr_fold = plex.get_setting(f"{service_name}_folder")
-            
-            prof_names = [p["name"] for p in profiles]
-            fold_paths = [f["path"] for f in folders]
-            
-            p_idx = prof_names.index(next((p["name"] for p in profiles if str(p["id"]) == str(curr_prof)), prof_names[0])) if curr_prof else 0
-            f_idx = fold_paths.index(curr_fold) if curr_fold in fold_paths else 0
-            
-            sel_prof = st.selectbox(f"Default Profile", options=prof_names, index=p_idx, key=f"{service_name}_prof_sel")
-            sel_fold = st.selectbox(f"Default Root Path", options=fold_paths, index=f_idx, key=f"{service_name}_fold_sel")
-            
-            if st.button(f"Update Defaults", key=f"{service_name}_save_defaults"):
-                prof_id = next(p["id"] for p in profiles if p["name"] == sel_prof)
-                plex.save_setting(f"{service_name}_profile", str(prof_id))
-                plex.save_setting(f"{service_name}_folder", sel_fold)
-                get_radarr_profile_max_res.clear()
-                get_sonarr_profile_max_res.clear()
-                st.success("Defaults updated!")
+            if configs["profiles"] and configs["folders"]:
+                profiles = configs["profiles"]
+                folders = configs["folders"]
+
+                curr_prof = plex.get_setting(f"{service_name}_profile")
+                curr_fold = plex.get_setting(f"{service_name}_folder")
+
+                prof_names = [p["name"] for p in profiles]
+                fold_paths = [f["path"] for f in folders]
+
+                p_idx = prof_names.index(next((p["name"] for p in profiles if str(p["id"]) == str(curr_prof)), prof_names[0])) if curr_prof else 0
+                f_idx = fold_paths.index(curr_fold) if curr_fold in fold_paths else 0
+
+                sel_prof = st.selectbox(f"Default Profile", options=prof_names, index=p_idx, key=f"{service_name}_prof_sel")
+                sel_fold = st.selectbox(f"Default Root Path", options=fold_paths, index=f_idx, key=f"{service_name}_fold_sel")
+
+                if st.button(f"Update Defaults", key=f"{service_name}_save_defaults"):
+                    prof_id = next(p["id"] for p in profiles if p["name"] == sel_prof)
+                    plex.save_setting(f"{service_name}_profile", str(prof_id))
+                    plex.save_setting(f"{service_name}_folder", sel_fold)
+                    get_radarr_profile_max_res.clear()
+                    get_sonarr_profile_max_res.clear()
+                    st.success("Defaults updated!")
+            else:
+                err = configs.get("error")
+                if err:
+                    st.warning(f"Could not load profiles from {service_name.capitalize()}: {err}")
+                else:
+                    st.warning(f"No profiles or root folders returned from {service_name.capitalize()}.")
+                if st.button(f"🔄 Reload {service_name.capitalize()} Profiles", key=f"{service_name}_reload_cfg"):
+                    get_cached_radarr_configs.clear()
+                    get_cached_sonarr_configs.clear()
+                    st.rerun()
 
     with col_radarr:
         render_auto_config("radarr", get_cached_radarr_configs(
