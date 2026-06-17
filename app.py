@@ -1189,6 +1189,7 @@ def render_library_audit():
                             if ok_count:
                                 get_cached_radarr_items.clear()
                                 get_cached_sonarr_items.clear()
+                                st.session_state["audit_table"] = {"selection": {"rows": [], "columns": [], "cells": []}}
                                 st.success(f"Upgrade initiated for {ok_count}/{len(upgradeable_items)} item(s)")
                                 time.sleep(1)
                                 st.rerun()
