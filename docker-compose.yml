@@ -1,6 +1,8 @@
 services:
   plexwatched:
-    build: .
+    image: ghcr.io/ljlongwing/plex-library-auditor:latest
+    # Uncomment the line below (and remove the image: line) to build locally from source instead:
+    # build: .
     ports:
       - "8501:8501"
     volumes:
