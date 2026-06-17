@@ -333,7 +333,7 @@ def get_radarr_profile_max_resolution(profile_id):
     if not url or not api_key or not profile_id:
         return 0
     try:
-        res = requests.get(f"{url}/api/v3/qualityprofile/{profile_id}",
+        res = requests.get(f"{url.rstrip('/')}/api/v3/qualityprofile/{profile_id}",
                            headers={"X-Api-Key": api_key}, timeout=10)
         if res.status_code != 200:
             return 0
@@ -383,7 +383,7 @@ def get_sonarr_profile_max_resolution(profile_id):
     if not url or not api_key or not profile_id:
         return 0
     try:
-        res = requests.get(f"{url}/api/v3/qualityprofile/{profile_id}",
+        res = requests.get(f"{url.rstrip('/')}/api/v3/qualityprofile/{profile_id}",
                            headers={"X-Api-Key": api_key}, timeout=10)
         if res.status_code != 200:
             return 0

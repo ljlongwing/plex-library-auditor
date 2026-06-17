@@ -850,13 +850,21 @@ def render_library_audit():
     with col_t3:
         res_dupes_only = st.checkbox("Lower-res dupes only", help="Show items where you own the same content in a higher resolution")
     with col_t4:
-        _radarr_configured = bool(plex.get_setting("radarr_url") and plex.get_setting("radarr_api_key") and plex.get_setting("radarr_profile"))
-        _sonarr_configured = bool(plex.get_setting("sonarr_url") and plex.get_setting("sonarr_api_key") and plex.get_setting("sonarr_profile"))
+        _radarr_url = plex.get_setting("radarr_url")
+        _radarr_key = plex.get_setting("radarr_api_key")
+        _radarr_profile = plex.get_setting("radarr_profile")
+        _sonarr_url = plex.get_setting("sonarr_url")
+        _sonarr_key = plex.get_setting("sonarr_api_key")
+        _sonarr_profile = plex.get_setting("sonarr_profile")
+        _radarr_configured = bool(_radarr_url and _radarr_key and _radarr_profile)
+        _sonarr_configured = bool(_sonarr_url and _sonarr_key and _sonarr_profile)
         upgradeable_only = st.checkbox(
             "Upgradeable only",
             help="Items where your Radarr/Sonarr profile allows a higher resolution than what you own",
             disabled=not (_radarr_configured or _sonarr_configured)
         )
+        if (_radarr_url and _radarr_key and not _radarr_profile):
+            st.caption("⚠️ Radarr: set Default Profile in Settings")
 
     # Update Query Params for Persistence
     st.query_params["type"] = lib_type
@@ -1044,17 +1052,36 @@ def render_library_audit():
                 _sonarr_max = get_sonarr_profile_max_res(plex.get_setting("sonarr_profile") or "") if _sonarr_configured else 0
                 upgradeable_movies = []
                 upgradeable_shows = []
+                _upgrade_skip_reasons = []
                 for _, row in selected_items.iterrows():
                     res = str(row.get('Res', '') or '').lower()
                     res_px = _PLEX_RES_PX.get(res, 0)
-                    if row.get('Type') == 'movie' and _radarr_configured and _radarr_max > 0:
-                        tmdb_id = row.get('tmdb_id')
-                        if res_px < _radarr_max and tmdb_id and not pd.isna(tmdb_id):
-                            upgradeable_movies.append({'title': row['Title'], 'tmdb_id': int(tmdb_id)})
-                    elif row.get('Type') == 'show' and _sonarr_configured and _sonarr_max > 0:
-                        tvdb_id = row.get('tvdb_id')
-                        if res_px < _sonarr_max and tvdb_id and not pd.isna(tvdb_id):
-                            upgradeable_shows.append({'title': row['Title'], 'tvdb_id': int(tvdb_id)})
+                    if row.get('Type') == 'movie':
+                        if not _radarr_configured:
+                            _upgrade_skip_reasons.append(f"{row['Title']}: Radarr not fully configured (set Default Profile in Settings)")
+                        elif _radarr_max == 0:
+                            _upgrade_skip_reasons.append(f"{row['Title']}: Radarr profile max resolution is 0 (profile may use 'Any' quality)")
+                        else:
+                            tmdb_id = row.get('tmdb_id')
+                            if not tmdb_id or pd.isna(tmdb_id):
+                                _upgrade_skip_reasons.append(f"{row['Title']}: no TMDB ID (run a data refresh)")
+                            elif res_px >= _radarr_max:
+                                _upgrade_skip_reasons.append(f"{row['Title']}: already at or above profile max ({res} ≥ {_radarr_max}p)")
+                            else:
+                                upgradeable_movies.append({'title': row['Title'], 'tmdb_id': int(tmdb_id)})
+                    elif row.get('Type') == 'show':
+                        if not _sonarr_configured:
+                            _upgrade_skip_reasons.append(f"{row['Title']}: Sonarr not fully configured (set Default Profile in Settings)")
+                        elif _sonarr_max == 0:
+                            _upgrade_skip_reasons.append(f"{row['Title']}: Sonarr profile max resolution is 0")
+                        else:
+                            tvdb_id = row.get('tvdb_id')
+                            if not tvdb_id or pd.isna(tvdb_id):
+                                _upgrade_skip_reasons.append(f"{row['Title']}: no TVDB ID (run a data refresh)")
+                            elif res_px >= _sonarr_max:
+                                _upgrade_skip_reasons.append(f"{row['Title']}: already at or above profile max")
+                            else:
+                                upgradeable_shows.append({'title': row['Title'], 'tvdb_id': int(tvdb_id)})
                 upgradeable_items = upgradeable_movies + upgradeable_shows
 
                 st.divider()
@@ -1068,6 +1095,11 @@ def render_library_audit():
                             for _, row in selected_items.iterrows()
                         ]
                         st.rerun()
+                if _upgrade_skip_reasons and not upgradeable_items:
+                    with action_cols[1]:
+                        with st.expander("⚠️ Why no upgrade?"):
+                            for reason in _upgrade_skip_reasons:
+                                st.caption(reason)
                 if upgradeable_items:
                     svc_label = "Radarr/Sonarr" if (upgradeable_movies and upgradeable_shows) else ("Radarr" if upgradeable_movies else "Sonarr")
                     with action_cols[1]:
