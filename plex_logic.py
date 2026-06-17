@@ -6,7 +6,7 @@ from plexapi.myplex import MyPlexAccount, MyPlexPinLogin
 from plexapi.server import PlexServer
 import os
 from dotenv import load_dotenv
-from datetime import datetime
+from datetime import datetime, timezone
 import uuid
 import requests
 import json
@@ -835,7 +835,7 @@ def fetch_and_cache_data(plex_url, plex_token, progress_callback=None):
     # Ensure schema is current (adds any new columns added in migrations)
     init_db()
 
-    save_setting('last_refreshed_at', datetime.now().isoformat())
+    save_setting('last_refreshed_at', datetime.now(timezone.utc).isoformat())
 
     # Re-apply any deletions that happened while the refresh was running.
     with _data_lock:

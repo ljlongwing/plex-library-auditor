@@ -2,7 +2,8 @@ import sqlite3
 import streamlit as st
 import pandas as pd
 import plex_logic as plex
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo, available_timezones
 import time
 import urllib.parse
 import os
@@ -403,7 +404,15 @@ def main_dashboard():
             if last_refresh:
                 try:
                     refresh_dt = datetime.fromisoformat(last_refresh)
-                    progress_placeholder.caption(f"Last refreshed: {refresh_dt.strftime('%b %d, %Y %I:%M %p')}")
+                    user_tz_name = plex.get_setting('user_timezone') or 'UTC'
+                    try:
+                        user_tz = ZoneInfo(user_tz_name)
+                        if refresh_dt.tzinfo is None:
+                            refresh_dt = refresh_dt.replace(tzinfo=timezone.utc)
+                        refresh_dt = refresh_dt.astimezone(user_tz)
+                    except Exception:
+                        pass
+                    progress_placeholder.caption(f"Last refreshed: {refresh_dt.strftime('%b %d, %Y %I:%M %p')} ({user_tz_name})")
                 except ValueError:
                     pass
 
@@ -747,6 +756,21 @@ def render_settings():
             plex.save_setting("tautulli_api_key", tautulli_key)
             get_cached_tautulli_users.clear()
             st.success("Tautulli settings saved!")
+
+    st.divider()
+    st.subheader("Display")
+    _tz_names = sorted(available_timezones())
+    _saved_tz = plex.get_setting('user_timezone') or 'UTC'
+    _tz_default_idx = _tz_names.index(_saved_tz) if _saved_tz in _tz_names else _tz_names.index('UTC')
+    _selected_tz = st.selectbox(
+        "Timezone",
+        options=_tz_names,
+        index=_tz_default_idx,
+        help="Used for displaying timestamps like 'Last Refreshed'.",
+    )
+    if _selected_tz != _saved_tz:
+        plex.save_setting('user_timezone', _selected_tz)
+        st.rerun()
 
     st.divider()
     st.subheader("Data & Persistence")
