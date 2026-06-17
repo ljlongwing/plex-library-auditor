@@ -851,6 +851,55 @@ def render_library_audit():
     else:
         default_rating = all_ratings
 
+    # --- Preset + Rule Builder ---
+    preset_col, rule_col = st.columns([1, 3])
+    with preset_col:
+        preset_names = plex.list_presets()
+        if preset_names:
+            selected_preset = st.selectbox("Load Preset", ["—"] + preset_names, key="preset_load_sel")
+            p_load, p_del = st.columns(2)
+            with p_load:
+                if st.button("Load", use_container_width=True, key="preset_load_btn"):
+                    if selected_preset != "—":
+                        preset_data = plex.load_preset(selected_preset)
+                        st.session_state.filter_rules = preset_data['rules']
+                        if preset_data.get('lib_type'):
+                            st.session_state['_sms_val_lib_type'] = preset_data['lib_type']
+                            st.session_state['_sms_inner_lib_type'] = preset_data['lib_type']
+                        if preset_data.get('libraries'):
+                            st.session_state['_sms_val_libraries'] = preset_data['libraries']
+                            st.session_state['_sms_inner_libraries'] = preset_data['libraries']
+                        if preset_data.get('resolution'):
+                            st.session_state['_sms_val_resolution'] = preset_data['resolution']
+                            st.session_state['_sms_inner_resolution'] = preset_data['resolution']
+                        if preset_data.get('rating'):
+                            st.session_state['_sms_val_content_rating'] = preset_data['rating']
+                            st.session_state['_sms_inner_content_rating'] = preset_data['rating']
+                        st.rerun()
+            with p_del:
+                if st.button("Delete", use_container_width=True, key="preset_del_btn"):
+                    if selected_preset != "—":
+                        plex.delete_preset(selected_preset)
+                        st.rerun()
+        new_preset_name = st.text_input("Save current filters as…", placeholder="Preset name", key="preset_name_input")
+        if st.button("💾 Save Preset", use_container_width=True, key="preset_save_btn"):
+            if new_preset_name.strip():
+                preset_data = {
+                    'rules': st.session_state.get('filter_rules', []),
+                    'lib_type': st.session_state.get('_sms_val_lib_type', ["movie", "show"]),
+                    'libraries': st.session_state.get('_sms_val_libraries', list(all_libs)),
+                    'resolution': st.session_state.get('_sms_val_resolution', list(all_resolutions)),
+                    'rating': st.session_state.get('_sms_val_content_rating', list(all_ratings)),
+                }
+                plex.save_preset(new_preset_name.strip(), preset_data)
+                st.success(f'Saved "{new_preset_name.strip()}"')
+
+    with rule_col:
+        st.markdown("**Filter Rules**")
+        active_rules = render_rule_builder(all_resolutions)
+
+    st.divider()
+
     # Row 1: content type / library
     col1, col2 = st.columns(2)
     with col1:
@@ -897,34 +946,6 @@ def render_library_audit():
     st.query_params["res"] = res_filter
     st.query_params["rating"] = rating_filter
     st.query_params["coll"] = collection_search
-
-    # --- Preset + Rule Builder ---
-    st.divider()
-    preset_col, rule_col = st.columns([1, 3])
-    with preset_col:
-        preset_names = plex.list_presets()
-        if preset_names:
-            selected_preset = st.selectbox("Load Preset", ["—"] + preset_names, key="preset_load_sel")
-            p_load, p_del = st.columns(2)
-            with p_load:
-                if st.button("Load", use_container_width=True, key="preset_load_btn"):
-                    if selected_preset != "—":
-                        st.session_state.filter_rules = plex.load_preset(selected_preset)
-                        st.rerun()
-            with p_del:
-                if st.button("Delete", use_container_width=True, key="preset_del_btn"):
-                    if selected_preset != "—":
-                        plex.delete_preset(selected_preset)
-                        st.rerun()
-        new_preset_name = st.text_input("Save current rules as…", placeholder="Preset name", key="preset_name_input")
-        if st.button("💾 Save Preset", use_container_width=True, key="preset_save_btn"):
-            if new_preset_name.strip():
-                plex.save_preset(new_preset_name.strip(), st.session_state.filter_rules)
-                st.success(f'Saved \"{new_preset_name.strip()}\"')
-
-    with rule_col:
-        st.markdown("**Filter Rules**")
-        active_rules = render_rule_builder(all_resolutions)
 
     # Apply Filters
     filtered_df = df[df['type'].isin(lib_type) & df['library'].isin(libraries)]

@@ -1253,16 +1253,21 @@ def list_presets():
     raw = get_setting('_preset_names')
     return json.loads(raw) if raw else []
 
-def save_preset(name, conditions):
+def save_preset(name, preset_data):
     names = list_presets()
     if name not in names:
         names.append(name)
     save_setting('_preset_names', json.dumps(names))
-    save_setting(f'_preset_{name}', json.dumps(conditions))
+    save_setting(f'_preset_{name}', json.dumps(preset_data))
 
 def load_preset(name):
     raw = get_setting(f'_preset_{name}')
-    return json.loads(raw) if raw else []
+    if not raw:
+        return {'rules': [], 'lib_type': [], 'libraries': [], 'resolution': [], 'rating': []}
+    data = json.loads(raw)
+    if isinstance(data, list):  # backward compat: old format stored just the rules list
+        return {'rules': data, 'lib_type': [], 'libraries': [], 'resolution': [], 'rating': []}
+    return data
 
 def delete_preset(name):
     names = [n for n in list_presets() if n != name]
