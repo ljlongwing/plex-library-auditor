@@ -1107,26 +1107,37 @@ def render_library_audit():
                             _radarr_items = get_cached_radarr_items()
                             _sonarr_items = get_cached_sonarr_items()
                             ok_count = 0
+                            _errors = []
                             for item in upgradeable_movies:
                                 auto_status = plex.check_automation_status(item['tmdb_id'], "radarr", _radarr_items)
                                 if auto_status in ("Downloaded", "Monitored", "Tracked (Not Monitored)"):
-                                    ok, _ = plex.trigger_radarr_search(item['tmdb_id'], _radarr_items)
+                                    ok, msg = plex.trigger_radarr_search(item['tmdb_id'], _radarr_items)
                                 else:
                                     _r_profile = plex.get_setting("radarr_profile")
                                     _r_folder = plex.get_setting("radarr_folder")
-                                    ok, _ = plex.add_to_automation(item['tmdb_id'], "radarr", _r_profile, _r_folder, title=item['title']) if (_r_profile and _r_folder) else (False, "")
+                                    if _r_profile and _r_folder:
+                                        ok, msg = plex.add_to_automation(item['tmdb_id'], "radarr", _r_profile, _r_folder, title=item['title'])
+                                    else:
+                                        ok, msg = False, f"Not in Radarr and no folder configured (status: {auto_status})"
                                 if ok:
                                     ok_count += 1
+                                else:
+                                    _errors.append(f"{item['title']}: {msg}")
                             for item in upgradeable_shows:
                                 auto_status = plex.check_automation_status(item['tvdb_id'], "sonarr", _sonarr_items)
                                 if auto_status in ("Downloaded", "Monitored", "Tracked (Not Monitored)"):
-                                    ok, _ = plex.trigger_sonarr_search(item['tvdb_id'], _sonarr_items)
+                                    ok, msg = plex.trigger_sonarr_search(item['tvdb_id'], _sonarr_items)
                                 else:
                                     _s_profile = plex.get_setting("sonarr_profile")
                                     _s_folder = plex.get_setting("sonarr_folder")
-                                    ok, _ = plex.add_to_automation(item['tvdb_id'], "sonarr", _s_profile, _s_folder, title=item['title']) if (_s_profile and _s_folder) else (False, "")
+                                    if _s_profile and _s_folder:
+                                        ok, msg = plex.add_to_automation(item['tvdb_id'], "sonarr", _s_profile, _s_folder, title=item['title'])
+                                    else:
+                                        ok, msg = False, f"Not in Sonarr and no folder configured (status: {auto_status})"
                                 if ok:
                                     ok_count += 1
+                                else:
+                                    _errors.append(f"{item['title']}: {msg}")
                             if ok_count:
                                 get_cached_radarr_items.clear()
                                 get_cached_sonarr_items.clear()
@@ -1134,7 +1145,8 @@ def render_library_audit():
                                 time.sleep(1)
                                 st.rerun()
                             else:
-                                st.error(f"No upgrades initiated — set {svc_label} defaults in Settings")
+                                for _e in _errors:
+                                    st.error(_e)
         except Exception:
             # Silently handle indexing errors due to stale widget state
             pass

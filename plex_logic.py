@@ -365,14 +365,14 @@ def trigger_radarr_search(tmdb_id, all_radarr_items):
         return False, "Movie not found in Radarr"
     try:
         res = requests.post(
-            f"{url}/api/v3/command",
+            f"{url.rstrip('/')}/api/v3/command",
             headers={"X-Api-Key": api_key},
             json={"name": "MoviesSearch", "movieIds": [match["id"]]},
             timeout=10
         )
         if res.status_code in [200, 201, 202]:
             return True, "Upgrade search triggered"
-        return False, f"Radarr error: {res.text}"
+        return False, f"Radarr HTTP {res.status_code}: {res.text}"
     except Exception as e:
         return False, str(e)
 
@@ -414,14 +414,14 @@ def trigger_sonarr_search(tvdb_id, all_sonarr_items):
         return False, "Series not found in Sonarr"
     try:
         res = requests.post(
-            f"{url}/api/v3/command",
+            f"{url.rstrip('/')}/api/v3/command",
             headers={"X-Api-Key": api_key},
             json={"name": "SeriesSearch", "seriesId": match["id"]},
             timeout=10
         )
         if res.status_code in [200, 201, 202]:
             return True, "Upgrade search triggered"
-        return False, f"Sonarr error: {res.text}"
+        return False, f"Sonarr HTTP {res.status_code}: {res.text}"
     except Exception as e:
         return False, str(e)
 
@@ -437,9 +437,10 @@ def add_to_automation(external_id, service_type, profile_id, root_folder, title=
 
     try:
         if service_type == "radarr":
-            lookup_res = requests.get(f"{url}/api/v3/movie/lookup/tmdb?tmdbId={external_id}", headers={"X-Api-Key": api_key}, timeout=10)
+            base = url.rstrip('/')
+            lookup_res = requests.get(f"{base}/api/v3/movie/lookup/tmdb?tmdbId={external_id}", headers={"X-Api-Key": api_key}, timeout=10)
             if lookup_res.status_code != 200:
-                return False, "Could not find movie on TMDB via Radarr"
+                return False, f"Radarr lookup failed (HTTP {lookup_res.status_code})"
 
             movie_data = lookup_res.json()
             payload = {
@@ -451,17 +452,18 @@ def add_to_automation(external_id, service_type, profile_id, root_folder, title=
                 "monitored": True,
                 "addOptions": {"searchForMovie": True}
             }
-            add_res = requests.post(f"{url}/api/v3/movie", headers={"X-Api-Key": api_key}, json=payload, timeout=10)
+            add_res = requests.post(f"{base}/api/v3/movie", headers={"X-Api-Key": api_key}, json=payload, timeout=10)
             if add_res.status_code in [200, 201]:
                 return True, "Added to Radarr"
-            return False, f"Radarr error: {add_res.text}"
+            return False, f"Radarr HTTP {add_res.status_code}: {add_res.text}"
         else:
             if not external_id:
                 return False, "TVDB ID is required for Sonarr"
 
-            lookup_res = requests.get(f"{url}/api/v3/series/lookup?term=tvdb:{external_id}", headers={"X-Api-Key": api_key}, timeout=10)
+            base = url.rstrip('/')
+            lookup_res = requests.get(f"{base}/api/v3/series/lookup?term=tvdb:{external_id}", headers={"X-Api-Key": api_key}, timeout=10)
             if lookup_res.status_code != 200:
-                return False, "Could not find series on TVDB via Sonarr"
+                return False, f"Sonarr lookup failed (HTTP {lookup_res.status_code})"
 
             series_data = lookup_res.json()[0]
             payload = {
@@ -473,10 +475,10 @@ def add_to_automation(external_id, service_type, profile_id, root_folder, title=
                 "monitored": True,
                 "addOptions": {"searchForMissingEpisodes": True}
             }
-            add_res = requests.post(f"{url}/api/v3/series", headers={"X-Api-Key": api_key}, json=payload, timeout=10)
+            add_res = requests.post(f"{base}/api/v3/series", headers={"X-Api-Key": api_key}, json=payload, timeout=10)
             if add_res.status_code in [200, 201]:
                 return True, "Added to Sonarr"
-            return False, f"Sonarr error: {add_res.text}"
+            return False, f"Sonarr HTTP {add_res.status_code}: {add_res.text}"
 
     except Exception as e:
         return False, str(e)
