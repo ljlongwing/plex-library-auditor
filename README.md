@@ -50,6 +50,22 @@ Or set the variables directly in the `environment:` block — the commented-out 
 
 ---
 
+## Quick Start — Portainer
+
+1. In Portainer, go to **Stacks → Add stack**
+2. Choose **Repository** as the build method
+3. Set the repository URL to:
+   ```
+   https://github.com/ljlongwing/plex-library-auditor
+   ```
+4. Leave the compose path as `docker-compose.yml`
+5. Under **Environment variables**, add any settings you want to pre-provision (see the [Configuration](#configuration) table below) — or leave them blank and configure everything through the Settings tab after first launch
+6. Click **Deploy the stack**
+
+The app will be available on port **8501** of your Docker host. Data is persisted in a `data/` volume relative to the stack.
+
+---
+
 ## Quick Start — Local / Manual
 
 ### Requirements
