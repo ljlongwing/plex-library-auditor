@@ -664,21 +664,29 @@ def fetch_and_cache_data(plex_url, plex_token, progress_callback=None):
         progress_callback("Fetching global play history...", 0.05, is_overall=True)
     
     global_history = {}
-    try:
-        # Fetch a very large number of play history items in a single call.
-        # This is more reliable than manual pagination on some Plex servers.
-        # 100,000 items effectively covers "unlimited" history for almost all users.
+    tautulli_configured = bool(get_setting("tautulli_url") and get_setting("tautulli_api_key"))
+    if tautulli_configured:
         if progress_callback:
-            progress_callback("Fetching play history...", 0.05, is_overall=True)
-        
-        history = plex.history(maxresults=100000)
-        for entry in history:
-            rk = str(entry.ratingKey)
-            if rk not in global_history or (entry.viewedAt and entry.viewedAt > global_history[rk]):
-                global_history[rk] = entry.viewedAt
-    except Exception as e:
+            progress_callback("Fetching play history from Tautulli...", 0.05, is_overall=True)
+        global_history = get_tautulli_global_history()
         if progress_callback:
-            progress_callback(f"Note: Could not fetch global history ({e})", 0.05, is_overall=True)
+            progress_callback(f"Loaded {len(global_history)} history entries from Tautulli.", 0.05, is_overall=True)
+    else:
+        try:
+            # Fetch a very large number of play history items in a single call.
+            # This is more reliable than manual pagination on some Plex servers.
+            # 100,000 items effectively covers "unlimited" history for almost all users.
+            if progress_callback:
+                progress_callback("Fetching play history from Plex...", 0.05, is_overall=True)
+
+            history = plex.history(maxresults=100000)
+            for entry in history:
+                rk = str(entry.ratingKey)
+                if rk not in global_history or (entry.viewedAt and entry.viewedAt > global_history[rk]):
+                    global_history[rk] = entry.viewedAt
+        except Exception as e:
+            if progress_callback:
+                progress_callback(f"Note: Could not fetch global history ({e})", 0.05, is_overall=True)
 
     sections = plex.library.sections()
     valid_sections = [s for s in sections if s.type in ['movie', 'show']]
@@ -1289,6 +1297,34 @@ def get_tautulli_users(url=None, api_key=None):
     except Exception as e:
         print(f"Tautulli error fetching users: {e}")
     return []
+
+def get_tautulli_global_history(url=None, api_key=None):
+    """Return {rating_key: most_recent_datetime} for all items across all users."""
+    url = url or get_setting("tautulli_url")
+    api_key = api_key or get_setting("tautulli_api_key")
+    if not url or not api_key:
+        return {}
+    try:
+        res = requests.get(
+            f"{url}/api/v2",
+            params={"apikey": api_key, "cmd": "get_history", "length": 100000},
+            timeout=30
+        )
+        if res.status_code == 200:
+            rows = res.json().get("response", {}).get("data", {}).get("data", [])
+            history = {}
+            for r in rows:
+                rk = str(r.get("rating_key", ""))
+                ts = r.get("date")
+                if not rk or not ts:
+                    continue
+                dt = datetime.utcfromtimestamp(ts)
+                if rk not in history or dt > history[rk]:
+                    history[rk] = dt
+            return history
+    except Exception as e:
+        print(f"Tautulli error fetching global history: {e}")
+    return {}
 
 def get_tautulli_watched_keys(user_id, url=None, api_key=None):
     url = url or get_setting("tautulli_url")
