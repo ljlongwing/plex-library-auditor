@@ -617,8 +617,8 @@ def render_settings():
                             st.error(err)
                         elif items:
                             st.success(f"Connected! Found {len(items)} items.")
-                            if service_name == "radarr": st.cache_data.clear(get_cached_radarr_items)
-                            else: st.cache_data.clear(get_cached_sonarr_items)
+                            if service_name == "radarr": get_cached_radarr_items.clear()
+                            else: get_cached_sonarr_items.clear()
                         else:
                             st.warning("Connected but library appears empty.")
 
