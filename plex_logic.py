@@ -458,8 +458,9 @@ def get_setting(key):
 def start_plex_auth():
     """Starts the OAuth PIN flow. Returns (pin_login, pin_id) tuple.
 
-    pin_id is extracted at creation time because the attribute name has changed
-    across plexapi versions and may not be reliably accessible later.
+    run() is called here because newer plexapi versions populate _id only
+    after run() fetches the PIN from plex.tv. The browser-open step inside
+    run() will silently fail in Docker, which is fine.
     """
     client_id = get_client_id()
     headers = {
@@ -468,14 +469,14 @@ def start_plex_auth():
         'X-Plex-Version': '1.0.0'
     }
     pin_login = MyPlexPinLogin(headers=headers, oauth=True)
-    pin_id = (
-        getattr(pin_login, 'id', None)
-        or getattr(pin_login, '_id', None)
-        or (getattr(pin_login, '_data', None) or {}).get('id')
-    )
+    try:
+        pin_login.run()
+    except Exception:
+        pass  # browser open fails in Docker; _id and _code are still set
+    pin_id = getattr(pin_login, '_id', None) or getattr(pin_login, 'id', None)
     if not pin_id:
         raise RuntimeError(
-            f"Could not find PIN ID on MyPlexPinLogin. "
+            f"Could not find PIN ID on MyPlexPinLogin after run(). "
             f"Available attributes: {[a for a in dir(pin_login) if not a.startswith('__')]}"
         )
     return pin_login, pin_id

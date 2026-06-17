@@ -491,10 +491,6 @@ def render_settings():
                         pin_login, pin_id = plex.start_plex_auth()
                         st.session_state.pin_login = pin_login
                         st.session_state.pin_id = pin_id
-                        try:
-                            pin_login.run()
-                        except Exception:
-                            pass  # run() tries to open a browser; harmless failure in Docker
                         st.rerun()
                     except Exception as e:
                         st.session_state.pin_login = None
