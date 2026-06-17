@@ -136,6 +136,8 @@ if 'pin_id' not in st.session_state:
     st.session_state.pin_id = None
 if 'filter_rules' not in st.session_state:
     st.session_state.filter_rules = []
+if '_audit_table_ver' not in st.session_state:
+    st.session_state._audit_table_ver = 0
 
 # --- Rule builder constants ---
 _RULE_FIELDS = ["Last Watched", "Play Count", "File Size (GB)", "Date Added", "Resolution"]
@@ -1081,7 +1083,7 @@ def render_library_audit():
         },
         on_select="rerun",
         selection_mode="multi-row",
-        key="audit_table"
+        key=f"audit_table_{st.session_state._audit_table_ver}"
     )
 
     # Handle selection trigger
@@ -1189,7 +1191,7 @@ def render_library_audit():
                             if ok_count:
                                 get_cached_radarr_items.clear()
                                 get_cached_sonarr_items.clear()
-                                st.session_state.pop("audit_table", None)
+                                st.session_state._audit_table_ver += 1
                                 st.success(f"Upgrade initiated for {ok_count}/{len(upgradeable_items)} item(s)")
                                 time.sleep(1)
                                 st.rerun()
@@ -1561,7 +1563,7 @@ def confirm_delete_dialog(items):
             
             if "pending_deletes" in st.session_state:
                 del st.session_state.pending_deletes
-            st.session_state.pop("audit_table", None)
+            st.session_state._audit_table_ver += 1
             _cached_load_library.clear()
             st.toast(f"✅ Deleted {success_count} of {num_items} items from Plex")
             st.rerun()
@@ -1570,7 +1572,7 @@ def confirm_delete_dialog(items):
             if "pending_deletes" in st.session_state:
                 del st.session_state.pending_deletes
             # Clear the selection on cancel too
-            st.session_state.pop("audit_table", None)
+            st.session_state._audit_table_ver += 1
             st.rerun()
 
 def render_audit_log():
