@@ -1189,7 +1189,7 @@ def render_library_audit():
                             if ok_count:
                                 get_cached_radarr_items.clear()
                                 get_cached_sonarr_items.clear()
-                                st.session_state["audit_table"] = {"selection": {"rows": [], "columns": [], "cells": []}}
+                                st.session_state.pop("audit_table", None)
                                 st.success(f"Upgrade initiated for {ok_count}/{len(upgradeable_items)} item(s)")
                                 time.sleep(1)
                                 st.rerun()
@@ -1561,8 +1561,7 @@ def confirm_delete_dialog(items):
             
             if "pending_deletes" in st.session_state:
                 del st.session_state.pending_deletes
-            if "audit_table" in st.session_state:
-                st.session_state["audit_table"] = {"selection": {"rows": [], "columns": [], "cells": []}}
+            st.session_state.pop("audit_table", None)
             _cached_load_library.clear()
             st.toast(f"✅ Deleted {success_count} of {num_items} items from Plex")
             st.rerun()
@@ -1571,8 +1570,7 @@ def confirm_delete_dialog(items):
             if "pending_deletes" in st.session_state:
                 del st.session_state.pending_deletes
             # Clear the selection on cancel too
-            if "audit_table" in st.session_state:
-                st.session_state["audit_table"] = {"selection": {"rows": [], "columns": [], "cells": []}}
+            st.session_state.pop("audit_table", None)
             st.rerun()
 
 def render_audit_log():
