@@ -884,36 +884,37 @@ def render_library_audit():
     _has_presets = bool(preset_names)
     _placeholder = "— select —" if _has_presets else "— no presets saved —"
 
-    pr1, pr2, pr3 = st.columns([4, 1, 1])
-    with pr1:
-        selected_preset = st.selectbox("Load preset", [_placeholder] + preset_names, key="preset_load_sel", label_visibility="hidden")
-    _preset_selected = _has_presets and selected_preset != _placeholder
-    with pr2:
-        if st.button("Load", use_container_width=True, key="preset_load_btn", disabled=not _preset_selected):
-            preset_data = plex.load_preset(selected_preset)
-            st.session_state.filter_rules = preset_data['rules']
-            if preset_data.get('lib_type'):
-                st.session_state['_sms_val_lib_type'] = preset_data['lib_type']
-                st.session_state['_sms_inner_lib_type'] = preset_data['lib_type']
-            if preset_data.get('libraries'):
-                st.session_state['_sms_val_libraries'] = preset_data['libraries']
-                st.session_state['_sms_inner_libraries'] = preset_data['libraries']
-            if preset_data.get('resolution'):
-                st.session_state['_sms_val_resolution'] = preset_data['resolution']
-                st.session_state['_sms_inner_resolution'] = preset_data['resolution']
-            if preset_data.get('rating'):
-                st.session_state['_sms_val_content_rating'] = preset_data['rating']
-                st.session_state['_sms_inner_content_rating'] = preset_data['rating']
-            st.rerun()
-    with pr3:
-        if st.button("Delete", use_container_width=True, key="preset_del_btn", disabled=not _preset_selected):
-            plex.delete_preset(selected_preset)
-            st.rerun()
+    _preset_label = f"📁 Presets ({len(preset_names)})" if _has_presets else "📁 Presets"
+    with st.popover(_preset_label, use_container_width=False):
+        st.caption("Load a saved preset")
+        selected_preset = st.selectbox("Load preset", [_placeholder] + preset_names, key="preset_load_sel", label_visibility="collapsed")
+        _preset_selected = _has_presets and selected_preset != _placeholder
+        lc1, lc2 = st.columns(2)
+        with lc1:
+            if st.button("Load", use_container_width=True, key="preset_load_btn", disabled=not _preset_selected):
+                preset_data = plex.load_preset(selected_preset)
+                st.session_state.filter_rules = preset_data['rules']
+                if preset_data.get('lib_type'):
+                    st.session_state['_sms_val_lib_type'] = preset_data['lib_type']
+                    st.session_state['_sms_inner_lib_type'] = preset_data['lib_type']
+                if preset_data.get('libraries'):
+                    st.session_state['_sms_val_libraries'] = preset_data['libraries']
+                    st.session_state['_sms_inner_libraries'] = preset_data['libraries']
+                if preset_data.get('resolution'):
+                    st.session_state['_sms_val_resolution'] = preset_data['resolution']
+                    st.session_state['_sms_inner_resolution'] = preset_data['resolution']
+                if preset_data.get('rating'):
+                    st.session_state['_sms_val_content_rating'] = preset_data['rating']
+                    st.session_state['_sms_inner_content_rating'] = preset_data['rating']
+                st.rerun()
+        with lc2:
+            if st.button("Delete", use_container_width=True, key="preset_del_btn", disabled=not _preset_selected):
+                plex.delete_preset(selected_preset)
+                st.rerun()
 
-    ps1, ps2 = st.columns([4, 2])
-    with ps1:
-        new_preset_name = st.text_input("Save preset", placeholder="Name this preset…", key="preset_name_input", label_visibility="hidden")
-    with ps2:
+        st.divider()
+        st.caption("Save current filters as a preset")
+        new_preset_name = st.text_input("Save preset", placeholder="Name this preset…", key="preset_name_input", label_visibility="collapsed")
         if st.button("💾 Save preset", use_container_width=True, key="preset_save_btn"):
             if new_preset_name.strip():
                 preset_data = {
