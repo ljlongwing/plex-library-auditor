@@ -125,7 +125,7 @@ def test_add_to_automation_radarr_lookup_failure(mock_db, mocker):
 
     success, msg = plex_logic.add_to_automation("999", "radarr", "1", "/movies")
     assert not success
-    assert "TMDB" in msg
+    assert "Radarr lookup failed" in msg
 
 def test_add_to_automation_sonarr_no_tvdb_id(mock_db):
     plex_logic.save_setting("sonarr_url", "http://sonarr:8989")
