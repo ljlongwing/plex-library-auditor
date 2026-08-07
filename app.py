@@ -1,4 +1,5 @@
 import sqlite3
+import json
 import streamlit as st
 import pandas as pd
 import plex_logic as plex
@@ -135,7 +136,11 @@ if 'pin_login' not in st.session_state:
 if 'pin_id' not in st.session_state:
     st.session_state.pin_id = None
 if 'filter_rules' not in st.session_state:
-    st.session_state.filter_rules = []
+    _q_rules = st.query_params.get("rules", "")
+    try:
+        st.session_state.filter_rules = json.loads(_q_rules) if _q_rules else []
+    except (json.JSONDecodeError, TypeError):
+        st.session_state.filter_rules = []
 if '_audit_table_ver' not in st.session_state:
     st.session_state._audit_table_ver = 0
 
@@ -984,6 +989,10 @@ def render_library_audit():
     st.query_params["res"] = res_filter
     st.query_params["rating"] = rating_filter
     st.query_params["coll"] = collection_search
+    if active_rules:
+        st.query_params["rules"] = json.dumps(active_rules)
+    elif "rules" in st.query_params:
+        del st.query_params["rules"]
 
     # Apply Filters
     filtered_df = df[df['type'].isin(lib_type) & df['library'].isin(libraries)]
