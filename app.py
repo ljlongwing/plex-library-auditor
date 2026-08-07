@@ -812,6 +812,32 @@ def render_library_audit():
     with mc4:
         st.metric("Never Watched", f"{never_watched:,}")
 
+    # Upgrade queue: items previously sent to Radarr/Sonarr. Drop any that
+    # Radarr/Sonarr now reports as downloaded so the badge/filter stays current
+    # without requiring a full Plex library refresh.
+    pending_upgrades_df = plex.get_upgrade_queue()
+    if not pending_upgrades_df.empty:
+        _pu_radarr_items = get_cached_radarr_items() if plex.get_setting("radarr_url") else []
+        _pu_sonarr_items = get_cached_sonarr_items() if plex.get_setting("sonarr_url") else []
+        _completed_keys = [
+            r['rating_key'] for _, r in pending_upgrades_df.iterrows()
+            if plex.check_automation_status(
+                r['external_id'], r['service_type'],
+                _pu_radarr_items if r['service_type'] == 'radarr' else _pu_sonarr_items
+            ) == "Downloaded"
+        ]
+        if _completed_keys:
+            plex.clear_upgrade_requests(_completed_keys)
+            pending_upgrades_df = pending_upgrades_df[~pending_upgrades_df['rating_key'].isin(_completed_keys)]
+
+    pending_upgrade_keys = set(pending_upgrades_df['rating_key']) if not pending_upgrades_df.empty else set()
+    if pending_upgrade_keys:
+        with st.expander(f"⬆️ {len(pending_upgrade_keys)} item(s) pending upgrade"):
+            st.dataframe(pending_upgrades_df[['title', 'service_type', 'requested_at']], hide_index=True, width="stretch")
+            if st.button("Clear upgrade queue", key="clear_upgrade_queue_btn"):
+                plex.clear_all_upgrade_requests()
+                st.rerun()
+
     st.divider()
 
     # Filters Initialization from Query Params
@@ -920,13 +946,19 @@ def render_library_audit():
     active_rules = render_rule_builder(all_resolutions)
 
     # Row 3: text searches + res dedup + upgrade filter
-    col_t1, col_t2, col_t3, col_t4 = st.columns([2, 2, 1, 1])
+    col_t1, col_t2, col_t3, col_t4, col_t5 = st.columns([2, 2, 1, 1, 1])
     with col_t1:
         title_search = st.text_input("Filter by Title", value=default_search, placeholder="Filter by name...")
     with col_t2:
         collection_search = st.text_input("Filter by Collection", value=default_coll, placeholder="e.g. Marvel, Star Wars…")
     with col_t3:
         res_dupes_only = st.checkbox("Lower-res dupes only", help="Show items where you own the same content in a higher resolution")
+    with col_t5:
+        hide_pending_upgrades = st.checkbox(
+            "Hide pending upgrades",
+            help="Hide items already sent to Radarr/Sonarr for an upgrade that hasn't finished downloading yet",
+            disabled=not pending_upgrade_keys
+        )
     with col_t4:
         _radarr_url = plex.get_setting("radarr_url")
         _radarr_key = plex.get_setting("radarr_api_key")
@@ -976,6 +1008,10 @@ def render_library_audit():
         dupe_df = plex.get_resolution_duplicates()
         if not dupe_df.empty:
             filtered_df = filtered_df[filtered_df['rating_key'].isin(dupe_df['rating_key'])]
+
+    # Pending-upgrade filter
+    if hide_pending_upgrades and pending_upgrade_keys:
+        filtered_df = filtered_df[~filtered_df['rating_key'].astype(str).isin(pending_upgrade_keys)]
 
     # Upgradeable filter: items whose resolution is below the Radarr/Sonarr profile max
     _PLEX_RES_PX = {'sd': 480, '720': 720, '1080': 1080, '4k': 2160}
@@ -1040,6 +1076,9 @@ def render_library_audit():
     
     # Format Size to GB
     display_df['Size (GB)'] = (display_df['size_bytes'] / (1024**3)).round(2)
+
+    # Flag items already sent to Radarr/Sonarr for upgrade
+    display_df['Upgrade'] = display_df['rating_key'].apply(lambda rk: "⬆️ Pending" if str(rk) in pending_upgrade_keys else "")
     
     # Create the Plex Web Link
     # https://app.plex.tv/desktop/#!/server/{machineIdentifier}/details?key=%2Flibrary%2Fmetadata%2F{ratingKey}
@@ -1060,7 +1099,7 @@ def render_library_audit():
     })
 
     # Final column selection
-    cols_to_show = ['Plex Link', 'Title', 'Released', 'Rating', 'Res', 'Type', 'Status', 'Library', 'Collections', 'First Added', 'Latest Added', 'Last Watched', 'Watched', 'Size (GB)']
+    cols_to_show = ['Plex Link', 'Title', 'Released', 'Rating', 'Res', 'Type', 'Status', 'Upgrade', 'Library', 'Collections', 'First Added', 'Latest Added', 'Last Watched', 'Watched', 'Size (GB)']
 
     # Display as an interactive table with multi-row selection
     selection = st.dataframe(
@@ -1074,6 +1113,7 @@ def render_library_audit():
             "Res": st.column_config.TextColumn("Res", width="small"),
             "Collections": st.column_config.TextColumn("Collections", width="medium"),
             "Status": st.column_config.TextColumn("Status", width="small"),
+            "Upgrade": st.column_config.TextColumn("Upgrade", width="small"),
             "First Added": st.column_config.TextColumn("First Added"),
             "Latest Added": st.column_config.TextColumn("Latest Added"),
             "Last Watched": st.column_config.TextColumn("Last Watched"),
@@ -1118,7 +1158,7 @@ def render_library_audit():
                             elif res_px >= _radarr_max:
                                 _upgrade_skip_reasons.append(f"{row['Title']}: already at or above profile max ({res} ≥ {_radarr_max}p)")
                             else:
-                                upgradeable_movies.append({'title': row['Title'], 'tmdb_id': int(tmdb_id)})
+                                upgradeable_movies.append({'title': row['Title'], 'tmdb_id': int(tmdb_id), 'rating_key': row['rating_key']})
                     elif row.get('Type') == 'show':
                         if not _sonarr_configured:
                             _upgrade_skip_reasons.append(f"{row['Title']}: Sonarr not fully configured (set Default Profile in Settings)")
@@ -1131,7 +1171,7 @@ def render_library_audit():
                             elif res_px >= _sonarr_max:
                                 _upgrade_skip_reasons.append(f"{row['Title']}: already at or above profile max")
                             else:
-                                upgradeable_shows.append({'title': row['Title'], 'tvdb_id': int(tvdb_id)})
+                                upgradeable_shows.append({'title': row['Title'], 'tvdb_id': int(tvdb_id), 'rating_key': row['rating_key']})
                 upgradeable_items = upgradeable_movies + upgradeable_shows
 
                 st.divider()
@@ -1171,6 +1211,7 @@ def render_library_audit():
                                         ok, msg = False, f"Not in Radarr and no folder configured (status: {auto_status})"
                                 if ok:
                                     ok_count += 1
+                                    plex.log_upgrade_request(item['rating_key'], item['title'], 'movie', 'radarr', item['tmdb_id'])
                                 else:
                                     _errors.append(f"{item['title']}: {msg}")
                             for item in upgradeable_shows:
@@ -1186,6 +1227,7 @@ def render_library_audit():
                                         ok, msg = False, f"Not in Sonarr and no folder configured (status: {auto_status})"
                                 if ok:
                                     ok_count += 1
+                                    plex.log_upgrade_request(item['rating_key'], item['title'], 'show', 'sonarr', item['tvdb_id'])
                                 else:
                                     _errors.append(f"{item['title']}: {msg}")
                             if ok_count:

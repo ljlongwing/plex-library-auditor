@@ -241,6 +241,17 @@ def init_db():
         rating_key TEXT
     )''')
 
+    # Table for tracking items sent to Radarr/Sonarr for upgrade, so the
+    # audit list can show what's still pending a re-download.
+    c.execute('''CREATE TABLE IF NOT EXISTS upgrade_queue (
+        rating_key TEXT PRIMARY KEY,
+        title TEXT,
+        type TEXT,
+        service_type TEXT,
+        external_id TEXT,
+        requested_at TEXT
+    )''')
+
     conn.commit()
     conn.close()
     get_client_id()
@@ -1244,6 +1255,46 @@ def get_deletion_log():
 def clear_deletion_log():
     conn = sqlite3.connect(DB_PATH)
     conn.execute("DELETE FROM deletion_log")
+    conn.commit()
+    conn.close()
+
+# --- Upgrade Queue ---
+# Tracks items sent to Radarr/Sonarr for an upgrade search, so the audit
+# list can flag "already requested" items until Radarr/Sonarr reports the
+# file as downloaded.
+
+def log_upgrade_request(rating_key, title, type_, service_type, external_id):
+    conn = sqlite3.connect(DB_PATH)
+    conn.execute(
+        "INSERT OR REPLACE INTO upgrade_queue (rating_key, title, type, service_type, external_id, requested_at) VALUES (?, ?, ?, ?, ?, ?)",
+        # rating_key/external_id may arrive as numpy scalars (from a pandas row); sqlite3
+        # silently binds those as BLOBs instead of TEXT, so coerce to str explicitly.
+        (str(rating_key), title, type_, service_type, str(external_id), datetime.now().isoformat())
+    )
+    conn.commit()
+    conn.close()
+
+def get_upgrade_queue():
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        df = pd.read_sql("SELECT * FROM upgrade_queue ORDER BY requested_at DESC", conn)
+    except Exception:
+        df = pd.DataFrame()
+    conn.close()
+    return df
+
+def clear_upgrade_requests(rating_keys):
+    if not rating_keys:
+        return
+    conn = sqlite3.connect(DB_PATH)
+    placeholders = ', '.join(['?'] * len(rating_keys))
+    conn.execute(f"DELETE FROM upgrade_queue WHERE rating_key IN ({placeholders})", list(rating_keys))
+    conn.commit()
+    conn.close()
+
+def clear_all_upgrade_requests():
+    conn = sqlite3.connect(DB_PATH)
+    conn.execute("DELETE FROM upgrade_queue")
     conn.commit()
     conn.close()
 
