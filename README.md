@@ -2,6 +2,19 @@
 
 A Streamlit web app for auditing your Plex library — surface unwatched content, identify incomplete series, and clean up stale media with one click.
 
+## Screenshots
+
+*Titles are blurred in these screenshots.*
+
+**Library Audit:** every movie and show with size, resolution, rating, collections and watch history,
+plus a rule builder to find what nobody watches.
+
+![Library Audit](docs/screenshots/library.png)
+
+**Audit Log:** everything deleted through the app, and how much space it freed.
+
+![Audit Log](docs/screenshots/audit-log.png)
+
 ## Features
 
 - **OAuth login** — authenticate via plex.tv (supports Google, Apple, and Facebook sign-in)
@@ -160,6 +173,12 @@ requirements-dev.txt  — adds pytest for local development
 Dockerfile
 docker-compose.yml
 ```
+
+---
+
+## Contributing
+
+Pull requests are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ---
 
