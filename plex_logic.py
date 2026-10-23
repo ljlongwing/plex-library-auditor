@@ -54,6 +54,9 @@ class _RateLimiter:
 # TMDB free tier caps at ~40 req/s; stay at 20/s to leave headroom.
 _tmdb_limiter = _RateLimiter(calls_per_second=20)
 
+# Series scans save to the DB every this many results, so an interrupted scan keeps finished work.
+SCAN_SAVE_EVERY = 100
+
 
 def test_tmdb_connection(api_key):
     """Test a TMDB API key. Returns (ok: bool, message: str)."""
@@ -129,6 +132,42 @@ def get_refresh_state():
 def clear_refresh_done():
     with _state_lock:
         _refresh_state.update({"done": False, "error": None, "overall_msg": "", "item_msg": ""})
+
+# Background series scan state: same pattern as the refresh, so a scan survives closing the tab.
+_scan_state = {"running": False, "msg": "", "progress": 0.0, "done": False, "error": None}
+
+def start_background_series_scan(tmdb_api_key):
+    """Launch enrich_series_data in a background thread. Returns False if already running."""
+    with _state_lock:
+        if _scan_state["running"]:
+            return False
+        _scan_state.update({"running": True, "msg": "Starting...", "progress": 0.0, "done": False, "error": None})
+
+    def _progress(msg, pct):
+        with _state_lock:
+            _scan_state.update({"msg": msg, "progress": pct})
+
+    def _run():
+        try:
+            enrich_series_data(tmdb_api_key, progress_callback=_progress)
+        except Exception as e:
+            with _state_lock:
+                _scan_state["error"] = str(e)
+        finally:
+            with _state_lock:
+                _scan_state["done"] = True
+                _scan_state["running"] = False
+
+    threading.Thread(target=_run, daemon=True).start()
+    return True
+
+def get_scan_state():
+    with _state_lock:
+        return dict(_scan_state)
+
+def clear_scan_done():
+    with _state_lock:
+        _scan_state.update({"done": False, "error": None, "msg": "", "progress": 0.0})
 
 def get_client_id():
     """Retrieve or create a stable client identifier."""
@@ -1079,6 +1118,7 @@ def enrich_series_data(tmdb_api_key, progress_callback=None, target_collection_i
         return
 
     results = []
+    saved = 0
 
     # Deduplicate: for movies that already share a known collection_id, fetch once
     seen_collection_ids = set()
@@ -1113,24 +1153,29 @@ def enrich_series_data(tmdb_api_key, progress_callback=None, target_collection_i
             res = future.result()
             if res:
                 results.append(res)
+            # Save as we go, so an interrupted scan keeps its finished work
+            if len(results) - saved >= SCAN_SAVE_EVERY:
+                _save_series_results(conn, results[saved:])
+                saved = len(results)
 
-    # Batch Update DB
-    if results:
-        c = conn.cursor()
-        for res in results:
-            # Update library_cache
-            c.execute("UPDATE library_cache SET tmdb_collection_id = ? WHERE tmdb_id = ?", 
-                     (res['collection_id'], res['tmdb_id']))
-            # Update series_cache
-            if res['type'] == 'show':
-                c.execute("INSERT OR REPLACE INTO series_cache (collection_id, name, parts, status, last_updated, tvdb_id) VALUES (?, ?, ?, ?, ?, ?)",
-                         (res['collection_id'], res['name'], res['parts'], res['status'], datetime.now().isoformat(), res['tvdb_id']))
-            else:
-                c.execute("INSERT OR REPLACE INTO series_cache (collection_id, name, parts, status, last_updated) VALUES (?, ?, ?, ?, ?)",
-                         (res['collection_id'], res['name'], res['parts'], res['status'], datetime.now().isoformat()))
-        conn.commit()
-            
+    _save_series_results(conn, results[saved:])
     conn.close()
+
+def _save_series_results(conn, results):
+    """Write a batch of TMDB series/collection results to library_cache and series_cache."""
+    if not results:
+        return
+    c = conn.cursor()
+    for res in results:
+        c.execute("UPDATE library_cache SET tmdb_collection_id = ? WHERE tmdb_id = ?",
+                  (res['collection_id'], res['tmdb_id']))
+        if res['type'] == 'show':
+            c.execute("INSERT OR REPLACE INTO series_cache (collection_id, name, parts, status, last_updated, tvdb_id) VALUES (?, ?, ?, ?, ?, ?)",
+                      (res['collection_id'], res['name'], res['parts'], res['status'], datetime.now().isoformat(), res['tvdb_id']))
+        else:
+            c.execute("INSERT OR REPLACE INTO series_cache (collection_id, name, parts, status, last_updated) VALUES (?, ?, ?, ?, ?)",
+                      (res['collection_id'], res['name'], res['parts'], res['status'], datetime.now().isoformat()))
+    conn.commit()
 
 def toggle_series_visibility(collection_id, hide=True):
     """Marks a series as hidden or visible."""

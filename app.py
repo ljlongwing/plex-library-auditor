@@ -1313,25 +1313,27 @@ def render_series_auditor():
     radarr_items = get_cached_radarr_items()
     sonarr_items = get_cached_sonarr_items()
 
+    scan = plex.get_scan_state()
     with st.container(border=True):
         st.markdown("**Scan Library**")
-        st.caption("Enrich metadata from TMDB to identify collection gaps.")
-        scan_clicked = st.button("🔍 Scan for Missing Series Items", use_container_width=True)
-
-    if scan_clicked:
-        progress_bar = st.progress(0)
-        status_text = st.empty()
-
-        def update_progress(msg, progress):
-            status_text.text(msg)
-            progress_bar.progress(progress)
-
-        with st.spinner("Enriching library with TMDB data..."):
-            plex.enrich_series_data(st.session_state.tmdb_api_key, progress_callback=update_progress)
-            _cached_load_library.clear()
-            st.success("Series data updated!")
-            time.sleep(1)
+        st.caption("Enrich metadata from TMDB to identify collection gaps. "
+                   "The scan runs in the background, so you can leave this page.")
+        if st.button("🔍 Scan for Missing Series Items", use_container_width=True, disabled=scan["running"]):
+            plex.start_background_series_scan(st.session_state.tmdb_api_key)
             st.rerun()
+        if scan["running"]:
+            st.progress(scan["progress"], text=scan["msg"])
+
+    if scan["running"]:
+        time.sleep(1)
+        st.rerun()
+    if scan["done"]:
+        plex.clear_scan_done()
+        _cached_load_library.clear()
+        if scan["error"]:
+            st.error(f"Series scan failed: {scan['error']}")
+        else:
+            st.success("Series data updated!")
 
     audit_data = plex.get_series_audit_data()
     

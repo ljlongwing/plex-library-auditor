@@ -11,6 +11,10 @@ plus a rule builder to find what nobody watches.
 
 ![Library Audit](docs/screenshots/library.png)
 
+**Series Auditor:** collections and series you only partly own, with how many parts you have.
+
+![Series Auditor](docs/screenshots/series.png)
+
 **Audit Log:** everything deleted through the app, and how much space it freed.
 
 ![Audit Log](docs/screenshots/audit-log.png)
