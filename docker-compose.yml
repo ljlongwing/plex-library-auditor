@@ -28,6 +28,7 @@ services:
       # SONARR_API_KEY: your-sonarr-key
       # SONARR_PROFILE: "1"
       # SONARR_FOLDER: /tv
+      # APP_PASSWORD: choose-a-password   # optional login gate, see README "Security"
     # If you use local hostnames (e.g. http://radarr/ or http://sonarr/) and have a
     # local DNS server, uncomment and set the dns entry to your DNS server's IP so
     # the container can resolve those names:

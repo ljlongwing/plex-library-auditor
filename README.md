@@ -2,6 +2,19 @@
 
 A Streamlit web app for auditing your Plex library — surface unwatched content, identify incomplete series, and clean up stale media with one click.
 
+## Screenshots
+
+*Titles are blurred in these screenshots.*
+
+**Library Audit:** every movie and show with size, resolution, rating, collections and watch history,
+plus a rule builder to find what nobody watches.
+
+![Library Audit](docs/screenshots/library.png)
+
+**Audit Log:** everything deleted through the app, and how much space it freed.
+
+![Audit Log](docs/screenshots/audit-log.png)
+
 ## Features
 
 - **OAuth login** — authenticate via plex.tv (supports Google, Apple, and Facebook sign-in)
@@ -97,6 +110,20 @@ Open **http://localhost:8501**.
 
 ---
 
+## Security
+
+This is a **single-user** app. Once connected, it acts with your Plex server owner's token for everyone
+who can open it, including **deleting media**. It has no user accounts.
+
+- Keep it on your LAN, or put it behind an authenticating reverse proxy (Authelia, Authentik,
+  Cloudflare Access, NPM access lists, ...). Don't expose it to the internet as-is.
+- For a simple extra lock, set **`APP_PASSWORD`**: the app then asks for that password before
+  showing anything. The unlock lasts for one browser session.
+- Saved tokens and API keys are never sent back to the browser. Settings fields for them stay
+  blank (leave blank to keep the saved value).
+
+---
+
 ## Configuration
 
 All settings can be entered through the **Settings** tab in the UI and are persisted to the database. You can also supply them as environment variables (useful for Docker or headless restarts).
@@ -115,6 +142,7 @@ All settings can be entered through the **Settings** tab in the UI and are persi
 | `SONARR_PROFILE` | Optional | Sonarr quality profile ID |
 | `SONARR_FOLDER` | Optional | Root folder path for Sonarr |
 | `CACHE_DB_PATH` | Optional | Path to the SQLite database (default: `cache.sqlite` in project root) |
+| `APP_PASSWORD` | Optional | If set, the app asks for this password before showing anything. See [Security](#security). |
 
 *\*Can be obtained via the OAuth login flow in the UI instead of setting manually.*
 
@@ -148,6 +176,12 @@ docker-compose.yml
 
 ---
 
+## Contributing
+
+Pull requests are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md).
+
+---
+
 ## License
 
-MIT
+[MIT](LICENSE)
