@@ -1,5 +1,6 @@
 import sqlite3
 import json
+import hmac
 import streamlit as st
 import pandas as pd
 import plex_logic as plex
@@ -123,6 +124,28 @@ st.markdown("""
     }
     </style>
     """, unsafe_allow_html=True)
+
+# Optional shared password. Without APP_PASSWORD the app trusts anyone who can reach it, and it acts
+# with the saved Plex owner token (including deletes), so keep it on your LAN or behind an auth proxy.
+# shortcut: unlock lasts one browser session (a page reload asks again); use an auth proxy for real SSO.
+_app_password = os.environ.get("APP_PASSWORD", "")
+if _app_password and not st.session_state.get("app_unlocked"):
+    st.markdown("## 🎬 Plex Library Auditor")
+    with st.form("app_login"):
+        _entered = st.text_input("Password", type="password")
+        if st.form_submit_button("Unlock"):
+            if hmac.compare_digest(_entered.encode(), _app_password.encode()):
+                st.session_state.app_unlocked = True
+                st.rerun()
+            time.sleep(1)  # slows down password guessing
+            st.error("Wrong password.")
+    st.stop()
+
+def secret_input(label, saved, **kwargs):
+    """Password field that never sends the saved secret to the browser. Blank keeps the saved value."""
+    typed = st.text_input(label, value="", type="password",
+                          placeholder="Saved. Leave blank to keep it" if saved else "", **kwargs)
+    return typed.strip() or (saved or "")
 
 # Initialize session state
 if 'plex_token' not in st.session_state:
@@ -580,7 +603,7 @@ def render_settings():
         else:
             # Manual Mode
             manual_url = st.text_input("Server URL", value=st.session_state.plex_url or "http://192.168.1.X:32400")
-            manual_token = st.text_input("Plex Token", value=st.session_state.plex_token or "", type="password")
+            manual_token = secret_input("Plex Token", st.session_state.plex_token)
             if st.button("Save Manual Connection"):
                 if not manual_url.startswith(("http://", "https://")):
                     st.error("Server URL must start with http:// or https://")
@@ -612,7 +635,7 @@ def render_settings():
             _tmdb_s.markdown("⚪ Not configured")
 
         st.write("Required for Series Auditor to identify collections and missing items.")
-        curr_tmdb = st.text_input("TMDB API Key", value=st.session_state.tmdb_api_key or "", type="password")
+        curr_tmdb = secret_input("TMDB API Key", st.session_state.tmdb_api_key)
         col_test_tmdb, col_save_tmdb = st.columns(2)
         with col_test_tmdb:
             if st.button("🧪 Test TMDB Key", use_container_width=True):
@@ -650,7 +673,7 @@ def render_settings():
             _svc_s.markdown("⚪ Not configured")
 
         url = st.text_input(f"{service_name.capitalize()} URL", value=plex.get_setting(f"{service_name}_url") or "", placeholder="http://192.168.1.50:7878")
-        key = st.text_input(f"{service_name.capitalize()} API Key", value=plex.get_setting(f"{service_name}_api_key") or "", type="password")
+        key = secret_input(f"{service_name.capitalize()} API Key", plex.get_setting(f"{service_name}_api_key"))
 
         col_test, col_save = st.columns(2)
 
@@ -743,8 +766,7 @@ def render_settings():
         tautulli_url = st.text_input("Tautulli URL", value=plex.get_setting("tautulli_url") or "",
                                      placeholder="http://192.168.1.50:8181")
     with col_taut2:
-        tautulli_key = st.text_input("Tautulli API Key", value=plex.get_setting("tautulli_api_key") or "",
-                                     type="password")
+        tautulli_key = secret_input("Tautulli API Key", plex.get_setting("tautulli_api_key"))
     col_tt, col_ts = st.columns(2)
     with col_tt:
         if st.button("🧪 Test Tautulli", use_container_width=True):
