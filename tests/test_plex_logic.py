@@ -1,4 +1,5 @@
 import pytest
+import time
 import plex_logic
 import sqlite3
 import json
@@ -309,10 +310,10 @@ def test_series_scan_saves_in_batches_and_keeps_work_on_failure(mock_db, mocker)
     conn.commit()
     conn.close()
 
-    calls = {"n": 0}
     def fake_fetch(row, key):
-        calls["n"] += 1
-        if calls["n"] == 5:
+        # One lookup fails, and only after the others have finished (lookups run in parallel threads)
+        if row["tmdb_id"] == "104":
+            time.sleep(0.5)
             raise RuntimeError("TMDB went away")
         return {"type": "movie", "tmdb_id": row["tmdb_id"], "collection_id": f"movie_{row['tmdb_id']}",
                 "name": row["title"], "parts": "[]", "status": "Released"}
@@ -325,7 +326,7 @@ def test_series_scan_saves_in_batches_and_keeps_work_on_failure(mock_db, mocker)
     conn = sqlite3.connect(mock_db)
     saved = conn.execute("SELECT COUNT(*) FROM series_cache").fetchone()[0]
     conn.close()
-    assert saved >= 2   # batches written before the failure survive
+    assert saved == 4   # both batches finished before the failure survive
 
 
 def test_background_series_scan_reports_completion(mock_db, mocker):
