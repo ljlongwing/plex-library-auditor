@@ -297,3 +297,46 @@ def test_get_series_audit_data_bad_json(mock_db):
     # Should not raise; bad JSON results in the series being skipped (no owned items → deleted)
     results = plex_logic.get_series_audit_data()
     assert isinstance(results, list)
+
+
+def test_series_scan_saves_in_batches_and_keeps_work_on_failure(mock_db, mocker):
+    """An interrupted scan must keep the results it already finished."""
+    import sqlite3
+    conn = sqlite3.connect(mock_db)
+    for i in range(5):
+        conn.execute("INSERT INTO library_cache (guid, rating_key, title, type, tmdb_id) VALUES (?, ?, ?, 'movie', ?)",
+                     (f"g{i}", f"rk{i}", f"Movie {i}", str(100 + i)))
+    conn.commit()
+    conn.close()
+
+    calls = {"n": 0}
+    def fake_fetch(row, key):
+        calls["n"] += 1
+        if calls["n"] == 5:
+            raise RuntimeError("TMDB went away")
+        return {"type": "movie", "tmdb_id": row["tmdb_id"], "collection_id": f"movie_{row['tmdb_id']}",
+                "name": row["title"], "parts": "[]", "status": "Released"}
+    mocker.patch("plex_logic.fetch_tmdb_movie_collection", side_effect=fake_fetch)
+    mocker.patch("plex_logic.SCAN_SAVE_EVERY", 2)
+
+    with pytest.raises(RuntimeError):
+        plex_logic.enrich_series_data("key")
+
+    conn = sqlite3.connect(mock_db)
+    saved = conn.execute("SELECT COUNT(*) FROM series_cache").fetchone()[0]
+    conn.close()
+    assert saved >= 2   # batches written before the failure survive
+
+
+def test_background_series_scan_reports_completion(mock_db, mocker):
+    import time as _time
+    mocker.patch("plex_logic.enrich_series_data", side_effect=lambda key, progress_callback=None: progress_callback("x", 1.0))
+    plex_logic.clear_scan_done()
+    assert plex_logic.start_background_series_scan("key") is True
+    for _ in range(50):
+        if plex_logic.get_scan_state()["done"]:
+            break
+        _time.sleep(0.05)
+    state = plex_logic.get_scan_state()
+    assert state["done"] and not state["running"] and state["error"] is None
+    plex_logic.clear_scan_done()
