@@ -133,41 +133,45 @@ def clear_refresh_done():
     with _state_lock:
         _refresh_state.update({"done": False, "error": None, "overall_msg": "", "item_msg": ""})
 
-# Background series scan state: same pattern as the refresh, so a scan survives closing the tab.
-_scan_state = {"running": False, "msg": "", "progress": 0.0, "done": False, "error": None}
+# Background jobs (series scan, bulk delete, bulk upgrade): run in a thread so they survive the
+# browser tab closing or refreshing. The page polls get_job_state(). One job per name at a time.
+_jobs = {}
+_IDLE_JOB = {"running": False, "msg": "", "progress": 0.0, "done": False, "error": None, "result": None}
 
-def start_background_series_scan(tmdb_api_key):
-    """Launch enrich_series_data in a background thread. Returns False if already running."""
+def start_job(name, fn, *args):
+    """Run fn(*args, progress_callback=...) in a background thread. Returns False if already running."""
     with _state_lock:
-        if _scan_state["running"]:
+        if _jobs.get(name, _IDLE_JOB)["running"]:
             return False
-        _scan_state.update({"running": True, "msg": "Starting...", "progress": 0.0, "done": False, "error": None})
+        _jobs[name] = {**_IDLE_JOB, "running": True, "msg": "Starting..."}
 
     def _progress(msg, pct):
         with _state_lock:
-            _scan_state.update({"msg": msg, "progress": pct})
+            _jobs[name].update(msg=msg, progress=pct)
 
     def _run():
         try:
-            enrich_series_data(tmdb_api_key, progress_callback=_progress)
+            result = fn(*args, progress_callback=_progress)
+            with _state_lock:
+                _jobs[name]["result"] = result
         except Exception as e:
             with _state_lock:
-                _scan_state["error"] = str(e)
+                _jobs[name]["error"] = str(e)
         finally:
             with _state_lock:
-                _scan_state["done"] = True
-                _scan_state["running"] = False
+                _jobs[name].update(done=True, running=False)
 
     threading.Thread(target=_run, daemon=True).start()
     return True
 
-def get_scan_state():
+def get_job_state(name):
     with _state_lock:
-        return dict(_scan_state)
+        return dict(_jobs.get(name, _IDLE_JOB))
 
-def clear_scan_done():
+def clear_job_done(name):
     with _state_lock:
-        _scan_state.update({"done": False, "error": None, "msg": "", "progress": 0.0})
+        if not _jobs.get(name, _IDLE_JOB)["running"]:
+            _jobs.pop(name, None)
 
 def get_client_id():
     """Retrieve or create a stable client identifier."""
@@ -960,83 +964,113 @@ def load_cached_data():
         conn.close()
     return df
 
-def unmonitor_in_automation(external_id, service_type):
-    """Unmonitors an item in Radarr or Sonarr to prevent re-downloads after deletion."""
+def _unmonitor_in_automation(service_type, external_ids):
+    """Unmonitor items in Radarr (TMDB ids) or Sonarr (TVDB ids) so deleted media isn't re-downloaded.
+    Fetches the full list once for all ids. Returns a list of error messages (empty on success)."""
     url = get_setting(f"{service_type}_url")
     api_key = get_setting(f"{service_type}_api_key")
-    if not url or not api_key or not external_id:
-        return
-
+    ids = {str(i) for i in external_ids if i}
+    if not url or not api_key or not ids:
+        return []
+    endpoint = "movie" if service_type == "radarr" else "series"
+    id_field = "tmdbId" if service_type == "radarr" else "tvdbId"
+    base = f"{url.rstrip('/')}/api/v3/{endpoint}"
     try:
-        endpoint = "movie" if service_type == "radarr" else "series"
-        id_field = "tmdbId" if service_type == "radarr" else "tvdbId"
-        
-        # 1. Find the item
-        res = requests.get(f"{url}/api/v3/{endpoint}", headers={"X-Api-Key": api_key}, timeout=5)
-        if res.status_code == 200:
-            items = res.json()
-            match = next((i for i in items if str(i.get(id_field)) == str(external_id)), None)
-            
-            if match and match.get('monitored'):
-                # 2. Update to unmonitored
-                match['monitored'] = False
-                put_url = f"{url}/api/v3/{endpoint}/{match['id']}"
-                requests.put(put_url, headers={"X-Api-Key": api_key}, json=match, timeout=5)
+        # Large libraries return several MB here, so allow more than a quick API call
+        res = requests.get(base, headers={"X-Api-Key": api_key}, timeout=30)
+        res.raise_for_status()
     except Exception as e:
-        print(f"Error unmonitoring {service_type} item: {e}")
+        return [f"Could not reach {service_type.capitalize()} to unmonitor {len(ids)} deleted item(s): {e}"]
+    errors = []
+    for match in (i for i in res.json() if str(i.get(id_field)) in ids and i.get('monitored')):
+        match['monitored'] = False
+        try:
+            requests.put(f"{base}/{match['id']}", headers={"X-Api-Key": api_key}, json=match, timeout=30).raise_for_status()
+        except Exception as e:
+            errors.append(f"Could not unmonitor '{match.get('title')}' in {service_type.capitalize()}: {e}")
+    return errors
 
-def delete_item(plex_url, plex_token, rating_key):
-    """Deletes an item from Plex and the local cache."""
-    # Fetch external IDs before deleting from cache
-    tmdb_id = None
-    tvdb_id = None
-    try:
-        conn_pre = sqlite3.connect(DB_PATH)
-        row = conn_pre.execute("SELECT tmdb_id, tvdb_id, type FROM library_cache WHERE rating_key = ?", (str(rating_key),)).fetchone()
-        if row:
-            tmdb_id, tvdb_id, item_type = row
-        conn_pre.close()
-    except Exception as e:
-        print(f"Could not pre-fetch external IDs for rating_key {rating_key}: {e}")
+def delete_items(plex_url, plex_token, items, progress_callback=None):
+    """Delete items (dicts with rk, title, type, library, size_bytes) from Plex, log each one, then empty
+    each library's trash once and unmonitor them in Radarr/Sonarr. Returns {"deleted": n, "errors": [...]}."""
+    plex = PlexServer(plex_url, plex_token)
+    if not getattr(plex, 'allowMediaDeletion', False):
+        raise Exception("Plex Server has 'Allow media deletion' DISABLED. Please enable it in Settings > Server > Library to delete files.")
 
-    # 1. Delete from Plex
-    try:
-        plex = PlexServer(plex_url, plex_token)
-        
-        # Check if the server allows deletion
-        if not getattr(plex, 'allowMediaDeletion', False):
-            raise Exception("Plex Server has 'Allow media deletion' DISABLED. Please enable it in Settings > Server > Library to delete files.")
+    rks = [str(i['rk']) for i in items]
+    conn = sqlite3.connect(DB_PATH)
+    ext_ids = {rk: (tmdb, tvdb) for rk, tmdb, tvdb in conn.execute(
+        f"SELECT rating_key, tmdb_id, tvdb_id FROM library_cache WHERE rating_key IN ({','.join('?' * len(rks))})", rks)}
+    conn.close()
 
-        item = plex.library.fetchItem(int(rating_key))
-        section = item.section()
-        item.delete()
-        
-        # 2. Trigger Empty Trash for the section to prevent ghosts
+    deleted, errors, sections, tmdb_ids, tvdb_ids = 0, [], {}, [], []
+    for idx, it in enumerate(items):
+        rk = str(it['rk'])
+        if progress_callback:
+            progress_callback(f"Deleting ({idx + 1}/{len(items)}): {it.get('title', rk)}", idx / len(items))
+        try:
+            item = plex.library.fetchItem(int(rk))
+            section = item.section()
+            item.delete()
+        except Exception as e:
+            hint = " Ensure 'Allow media deletion' is enabled and you are the server owner." if ("403" in str(e) or "400" in str(e)) else ""
+            errors.append(f"{it.get('title', rk)}: {e}.{hint}")
+            continue
+        # Log and drop from the cache right away, so the audit log always matches what Plex removed
+        log_deletion(it.get('title', ''), it.get('type', ''), it.get('library', ''), it.get('size_bytes', 0), rk)
+        with _data_lock:
+            _recently_deleted_keys.add(rk)  # a refresh running right now must not re-insert it
+        conn = sqlite3.connect(DB_PATH)
+        conn.execute("DELETE FROM library_cache WHERE rating_key = ?", (rk,))
+        conn.commit()
+        conn.close()
+        deleted += 1
+        sections[section.key] = section
+        # Movies go to Radarr, shows to Sonarr: TMDB numbers movies and shows separately, so sending a
+        # show's TMDB id to Radarr could unmonitor an unrelated movie with the same number
+        tmdb, tvdb = ext_ids.get(rk, (None, None))
+        if it.get('type') == 'movie':
+            tmdb_ids.append(tmdb)
+        elif it.get('type') == 'show':
+            tvdb_ids.append(tvdb)
+
+    if progress_callback:
+        progress_callback("Emptying library trash and updating Radarr/Sonarr...", 1.0)
+    for section in sections.values():  # once per library, not once per item
         try:
             section.emptyTrash()
         except Exception as e:
-            print(f"Could not empty trash after deletion: {e}")
-        
-        # 3. Sync with Radarr/Sonarr (Unmonitor)
-        if tmdb_id:
-            unmonitor_in_automation(tmdb_id, "radarr")
-        if tvdb_id:
-            unmonitor_in_automation(tvdb_id, "sonarr")
+            errors.append(f"Could not empty the trash of library '{section.title}': {e}")
+    errors += _unmonitor_in_automation("radarr", tmdb_ids)
+    errors += _unmonitor_in_automation("sonarr", tvdb_ids)
+    return {"deleted": deleted, "errors": errors}
 
-    except Exception as e:
-        if "403" in str(e) or "400" in str(e):
-            raise Exception(f"Plex denied deletion. Ensure 'Allow media deletion' is enabled and you are the server owner. Error: {e}")
-        raise Exception(f"Failed to delete from Plex: {e}")
-    
-    # Delete from local cache; also register the key so a concurrent background
-    # refresh doesn't re-insert this item when it replaces library_cache.
-    with _data_lock:
-        _recently_deleted_keys.add(str(rating_key))
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute("DELETE FROM library_cache WHERE rating_key = ?", (str(rating_key),))
-    conn.commit()
-    conn.close()
+def request_upgrades(movies, shows, progress_callback=None):
+    """Ask Radarr (movies: title, tmdb_id, rating_key) and Sonarr (shows: title, tvdb_id, rating_key) for a
+    better copy: search if they already track it, add it otherwise. Returns {"ok": n, "errors": [...]}."""
+    jobs = [(m, "radarr", "tmdb_id", "movie") for m in movies] + [(s, "sonarr", "tvdb_id", "show") for s in shows]
+    tracked = {svc: get_automation_items(svc) for svc in {svc for _, svc, _, _ in jobs}}
+    ok_count, errors = 0, []
+    for idx, (item, svc, id_key, type_) in enumerate(jobs):
+        if progress_callback:
+            progress_callback(f"Requesting upgrade ({idx + 1}/{len(jobs)}): {item['title']}", idx / len(jobs))
+        ext_id = item[id_key]
+        status = check_automation_status(ext_id, svc, tracked[svc])
+        if status in ("Downloaded", "Monitored", "Tracked (Not Monitored)"):
+            search = trigger_radarr_search if svc == "radarr" else trigger_sonarr_search
+            ok, msg = search(ext_id, tracked[svc])
+        else:
+            profile, folder = get_setting(f"{svc}_profile"), get_setting(f"{svc}_folder")
+            if profile and folder:
+                ok, msg = add_to_automation(ext_id, svc, profile, folder, title=item['title'])
+            else:
+                ok, msg = False, f"Not in {svc.capitalize()} and no folder configured (status: {status})"
+        if ok:
+            ok_count += 1
+            log_upgrade_request(item['rating_key'], item['title'], type_, svc, ext_id)
+        else:
+            errors.append(f"{item['title']}: {msg}")
+    return {"ok": ok_count, "errors": errors}
 
 def fetch_tmdb_movie_collection(row, tmdb_api_key):
     tmdb_id = row['tmdb_id']
