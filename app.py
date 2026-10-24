@@ -401,6 +401,27 @@ def _smart_select(label, options, default, key):
     return current
 
 
+def render_job_status(name, label, summary):
+    """Show a background job's progress, or its result once it finishes. Returns True while it runs."""
+    job = plex.get_job_state(name)
+    if job["running"]:
+        st.progress(job["progress"], text=f"{label}: {job['msg']}")
+        return True
+    if job["done"]:
+        plex.clear_job_done(name)
+        _cached_load_library.clear()
+        get_cached_radarr_items.clear()
+        get_cached_sonarr_items.clear()
+        st.session_state._audit_table_ver = st.session_state.get("_audit_table_ver", 0) + 1  # clears the row selection
+        result = job["result"] or {}
+        if job["error"]:
+            st.error(f"{label} failed: {job['error']}")
+        else:
+            st.success(summary(result))
+        for err in result.get("errors", []):
+            st.warning(err)
+    return False
+
 def main_dashboard():
     # Header Area - Row 1: Title and Status
     col_t1, col_t2 = st.columns([5, 1], vertical_alignment="center")
@@ -458,7 +479,10 @@ def main_dashboard():
             st.rerun()
 
     st.divider()
-    
+
+    jobs_running = render_job_status("delete", "Deleting", lambda r: f"✅ Deleted {r.get('deleted', 0)} item(s) from Plex")
+    jobs_running |= render_job_status("upgrade", "Requesting upgrades", lambda r: f"⬆️ Upgrade requested for {r.get('ok', 0)} item(s)")
+
     # Tab Navigation with URL Persistence
     tab_options = ["Library Audit", "Series Auditor", "📋 Audit Log", "⚙️ Settings"]
     
@@ -502,7 +526,7 @@ def main_dashboard():
         render_settings()
 
     # Polling: keep re-running while a background refresh is active
-    if refresh_state["running"]:
+    if refresh_state["running"] or jobs_running:
         time.sleep(0.5)
         st.rerun()
     elif refresh_state["done"] and not refresh_state["error"]:
@@ -1225,55 +1249,12 @@ def render_library_audit():
                 if upgradeable_items:
                     svc_label = "Radarr/Sonarr" if (upgradeable_movies and upgradeable_shows) else ("Radarr" if upgradeable_movies else "Sonarr")
                     with action_cols[1]:
-                        if st.button(f"⬆️ Upgrade {len(upgradeable_items)} via {svc_label}", use_container_width=True):
-                            _radarr_items = get_cached_radarr_items()
-                            _sonarr_items = get_cached_sonarr_items()
-                            ok_count = 0
-                            _errors = []
-                            for item in upgradeable_movies:
-                                auto_status = plex.check_automation_status(item['tmdb_id'], "radarr", _radarr_items)
-                                if auto_status in ("Downloaded", "Monitored", "Tracked (Not Monitored)"):
-                                    ok, msg = plex.trigger_radarr_search(item['tmdb_id'], _radarr_items)
-                                else:
-                                    _r_profile = plex.get_setting("radarr_profile")
-                                    _r_folder = plex.get_setting("radarr_folder")
-                                    if _r_profile and _r_folder:
-                                        ok, msg = plex.add_to_automation(item['tmdb_id'], "radarr", _r_profile, _r_folder, title=item['title'])
-                                    else:
-                                        ok, msg = False, f"Not in Radarr and no folder configured (status: {auto_status})"
-                                if ok:
-                                    ok_count += 1
-                                    plex.log_upgrade_request(item['rating_key'], item['title'], 'movie', 'radarr', item['tmdb_id'])
-                                else:
-                                    _errors.append(f"{item['title']}: {msg}")
-                            for item in upgradeable_shows:
-                                auto_status = plex.check_automation_status(item['tvdb_id'], "sonarr", _sonarr_items)
-                                if auto_status in ("Downloaded", "Monitored", "Tracked (Not Monitored)"):
-                                    ok, msg = plex.trigger_sonarr_search(item['tvdb_id'], _sonarr_items)
-                                else:
-                                    _s_profile = plex.get_setting("sonarr_profile")
-                                    _s_folder = plex.get_setting("sonarr_folder")
-                                    if _s_profile and _s_folder:
-                                        ok, msg = plex.add_to_automation(item['tvdb_id'], "sonarr", _s_profile, _s_folder, title=item['title'])
-                                    else:
-                                        ok, msg = False, f"Not in Sonarr and no folder configured (status: {auto_status})"
-                                if ok:
-                                    ok_count += 1
-                                    plex.log_upgrade_request(item['rating_key'], item['title'], 'show', 'sonarr', item['tvdb_id'])
-                                else:
-                                    _errors.append(f"{item['title']}: {msg}")
-                            if ok_count:
-                                get_cached_radarr_items.clear()
-                                get_cached_sonarr_items.clear()
-                                st.session_state._audit_table_ver += 1
-                                st.success(f"Upgrade initiated for {ok_count}/{len(upgradeable_items)} item(s)")
-                                time.sleep(1)
-                                st.rerun()
-                            else:
-                                for _e in _errors:
-                                    st.error(_e)
-        except Exception:
-            # Silently handle indexing errors due to stale widget state
+                        if st.button(f"⬆️ Upgrade {len(upgradeable_items)} via {svc_label}", use_container_width=True,
+                                     disabled=plex.get_job_state("upgrade")["running"]):
+                            plex.start_job("upgrade", plex.request_upgrades, upgradeable_movies, upgradeable_shows)
+                            st.rerun()
+        except (IndexError, KeyError):
+            # The selection can point past the table when it shrinks between reruns
             pass
 
 @st.cache_data(ttl=300)
@@ -1313,13 +1294,13 @@ def render_series_auditor():
     radarr_items = get_cached_radarr_items()
     sonarr_items = get_cached_sonarr_items()
 
-    scan = plex.get_scan_state()
+    scan = plex.get_job_state("series_scan")
     with st.container(border=True):
         st.markdown("**Scan Library**")
         st.caption("Enrich metadata from TMDB to identify collection gaps. "
                    "The scan runs in the background, so you can leave this page.")
         if st.button("🔍 Scan for Missing Series Items", use_container_width=True, disabled=scan["running"]):
-            plex.start_background_series_scan(st.session_state.tmdb_api_key)
+            plex.start_job("series_scan", plex.enrich_series_data, st.session_state.tmdb_api_key)
             st.rerun()
         if scan["running"]:
             st.progress(scan["progress"], text=scan["msg"])
@@ -1328,7 +1309,7 @@ def render_series_auditor():
         time.sleep(1)
         st.rerun()
     if scan["done"]:
-        plex.clear_scan_done()
+        plex.clear_job_done("series_scan")
         _cached_load_library.clear()
         if scan["error"]:
             st.error(f"Series scan failed: {scan['error']}")
@@ -1616,32 +1597,11 @@ def confirm_delete_dialog(items):
     
     col1, col2 = st.columns(2)
     with col1:
-        if st.button("❌ YES, DELETE ALL", use_container_width=True):
-            progress_bar = st.progress(0)
-            status_text = st.empty()
-            
-            success_count = 0
-            for idx, item in enumerate(items):
-                status_text.text(f"Deleting ({idx+1}/{num_items}): {item['title']}...")
-                try:
-                    plex.delete_item(st.session_state.plex_url, st.session_state.plex_token, item['rk'])
-                    plex.log_deletion(
-                        title=item['title'],
-                        type_=item.get('type', ''),
-                        library=item.get('library', ''),
-                        size_bytes=item.get('size_bytes', 0),
-                        rating_key=item['rk']
-                    )
-                    success_count += 1
-                except Exception as e:
-                    st.error(f"Failed to delete {item['title']}: {e}")
-                progress_bar.progress((idx + 1) / num_items)
-            
+        if st.button("❌ YES, DELETE ALL", use_container_width=True, disabled=plex.get_job_state("delete")["running"]):
+            # Runs in the background: closing or refreshing the tab no longer stops it halfway
+            plex.start_job("delete", plex.delete_items, st.session_state.plex_url, st.session_state.plex_token, items)
             if "pending_deletes" in st.session_state:
                 del st.session_state.pending_deletes
-            st.session_state._audit_table_ver += 1
-            _cached_load_library.clear()
-            st.toast(f"✅ Deleted {success_count} of {num_items} items from Plex")
             st.rerun()
     with col2:
         if st.button("Cancel", use_container_width=True):

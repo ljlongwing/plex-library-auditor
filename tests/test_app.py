@@ -94,3 +94,18 @@ def test_saved_secrets_are_not_sent_to_the_browser(mocker, monkeypatch):
     labels = [w.label for w in at.text_input]
     for label in ("Plex Token", "TMDB API Key", "Radarr API Key", "Sonarr API Key", "Tautulli API Key"):
         assert label in labels
+
+
+def test_finished_delete_job_shows_result_and_every_error(mocker, monkeypatch):
+    monkeypatch.delenv("APP_PASSWORD", raising=False)
+    mocker.patch("plex_logic.get_setting", return_value=None)
+    plex_logic._jobs["delete"] = {**plex_logic._IDLE_JOB, "done": True,
+                                  "result": {"deleted": 2, "errors": ["Could not unmonitor 'X' in Radarr: timed out"]}}
+    try:
+        at = AppTest.from_file(APP)
+        at.run()
+        assert any("Deleted 2 item(s)" in s.value for s in at.success)
+        assert any("Could not unmonitor 'X'" in w.value for w in at.warning)
+        assert "delete" not in plex_logic._jobs            # shown once, then cleared
+    finally:
+        plex_logic._jobs.pop("delete", None)

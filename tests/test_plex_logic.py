@@ -157,7 +157,7 @@ def test_add_to_automation_sonarr_success(mock_db, mocker):
 
 
 # ---------------------------------------------------------------------------
-# delete_item
+# delete_items
 # ---------------------------------------------------------------------------
 
 def test_delete_item_removes_from_cache(mock_db, mocker):
@@ -175,10 +175,11 @@ def test_delete_item_removes_from_cache(mock_db, mocker):
     mock_item.section.return_value = MagicMock()
     mock_server.library.fetchItem.return_value = mock_item
     mocker.patch("plex_logic.PlexServer", return_value=mock_server)
-    mocker.patch("plex_logic.unmonitor_in_automation")
+    mocker.patch("plex_logic._unmonitor_in_automation", return_value=[])
 
     plex_logic._recently_deleted_keys.discard("12345")
-    plex_logic.delete_item("http://plex:32400", "token", "12345")
+    result = plex_logic.delete_items("http://plex:32400", "token", [{"rk": "12345", "title": "Test Movie", "type": "movie"}])
+    assert result == {"deleted": 1, "errors": []}
 
     conn = sqlite3.connect(mock_db)
     row = conn.execute("SELECT * FROM library_cache WHERE rating_key = '12345'").fetchone()
@@ -193,7 +194,7 @@ def test_delete_item_raises_when_deletion_disabled(mock_db, mocker):
     mocker.patch("plex_logic.PlexServer", return_value=mock_server)
 
     with pytest.raises(Exception, match="Allow media deletion"):
-        plex_logic.delete_item("http://plex:32400", "token", "rk1")
+        plex_logic.delete_items("http://plex:32400", "token", [{"rk": "1", "title": "x"}])
 
 
 # ---------------------------------------------------------------------------
@@ -333,15 +334,15 @@ def test_series_scan_saves_in_batches_and_keeps_work_on_failure(mock_db, mocker)
 def test_background_series_scan_reports_completion(mock_db, mocker):
     import time as _time
     mocker.patch("plex_logic.enrich_series_data", side_effect=lambda key, progress_callback=None: progress_callback("x", 1.0))
-    plex_logic.clear_scan_done()
-    assert plex_logic.start_background_series_scan("key") is True
+    plex_logic.clear_job_done("series_scan")
+    assert plex_logic.start_job("series_scan", plex_logic.enrich_series_data, "key") is True
     for _ in range(50):
-        if plex_logic.get_scan_state()["done"]:
+        if plex_logic.get_job_state("series_scan")["done"]:
             break
         _time.sleep(0.05)
-    state = plex_logic.get_scan_state()
+    state = plex_logic.get_job_state("series_scan")
     assert state["done"] and not state["running"] and state["error"] is None
-    plex_logic.clear_scan_done()
+    plex_logic.clear_job_done("series_scan")
 
 
 # --- data correctness ---
@@ -421,3 +422,74 @@ def test_logout_beats_env_token(mock_db, monkeypatch):
     assert plex_logic.get_setting("plex_token") == "from-env"   # nothing saved: env is the fallback
     plex_logic.save_setting("plex_token", None)                  # Logout
     assert plex_logic.get_setting("plex_token") is None
+
+
+# --- background jobs: bulk delete and upgrades ---
+
+def _cache_rows(conn, rows):
+    for rk, title, type_, tmdb, tvdb in rows:
+        conn.execute("INSERT INTO library_cache (rating_key, guid, title, type, library, tmdb_id, tvdb_id) VALUES (?, ?, ?, ?, 'Lib', ?, ?)",
+                     (rk, f"g{rk}", title, type_, tmdb, tvdb))
+    conn.commit()
+
+
+def test_bulk_delete_one_connection_trash_once_logs_each_and_continues_past_failures(mock_db, mocker):
+    conn = sqlite3.connect(mock_db)
+    _cache_rows(conn, [("1", "A", "movie", "11", None), ("2", "B", "movie", "12", None),
+                       ("3", "C", "show", "13", "903"), ("4", "Gone", "movie", "14", None)])
+    conn.close()
+    server = MagicMock(allowMediaDeletion=True)
+    section = MagicMock(key="1", title="Movies")
+    def fetch(rk):
+        if rk == 4:
+            raise Exception("404 not found")
+        return MagicMock(**{"section.return_value": section})
+    server.library.fetchItem.side_effect = fetch
+    plex_server = mocker.patch("plex_logic.PlexServer", return_value=server)
+    unmonitor = mocker.patch("plex_logic._unmonitor_in_automation", return_value=[])
+    items = [{"rk": rk, "title": t, "type": ty, "size_bytes": 1} for rk, t, ty in
+             [("1", "A", "movie"), ("2", "B", "movie"), ("3", "C", "show"), ("4", "Gone", "movie")]]
+
+    result = plex_logic.delete_items("http://plex", "tok", items)
+
+    assert result["deleted"] == 3 and len(result["errors"]) == 1 and "Gone" in result["errors"][0]
+    assert plex_server.call_count == 1                    # one Plex connection for the whole batch
+    assert section.emptyTrash.call_count == 1             # trash emptied once per library, not per item
+    conn = sqlite3.connect(mock_db)
+    logged = sorted(r[0] for r in conn.execute("SELECT title FROM deletion_log"))
+    left = [r[0] for r in conn.execute("SELECT rating_key FROM library_cache")]
+    conn.close()
+    assert logged == ["A", "B", "C"] and left == ["4"]    # audit log matches exactly what Plex removed
+    # movies -> Radarr by TMDB id, shows -> Sonarr by TVDB id (a show's TMDB id must not reach Radarr)
+    unmonitor.assert_any_call("radarr", ["11", "12"])
+    unmonitor.assert_any_call("sonarr", ["903"])
+    for _ in ("1", "2", "3"):
+        plex_logic._recently_deleted_keys.discard(_)
+
+
+def test_unmonitor_failure_is_reported_not_swallowed(mock_db, mocker):
+    mocker.patch("plex_logic.get_setting", side_effect=lambda k: {"radarr_url": "http://radarr/", "radarr_api_key": "k"}.get(k))
+    mocker.patch("plex_logic.requests.get", side_effect=plex_logic.requests.exceptions.Timeout("timed out"))
+    errors = plex_logic._unmonitor_in_automation("radarr", ["11"])
+    assert errors and "Radarr" in errors[0]
+
+
+def test_unmonitor_fetches_list_once_and_unmonitors_matches(mock_db, mocker):
+    mocker.patch("plex_logic.get_setting", side_effect=lambda k: {"radarr_url": "http://radarr/", "radarr_api_key": "k"}.get(k))
+    movies = [{"id": 1, "tmdbId": 11, "monitored": True, "title": "A"}, {"id": 2, "tmdbId": 12, "monitored": True, "title": "B"},
+              {"id": 3, "tmdbId": 99, "monitored": True, "title": "Keep"}]
+    get = mocker.patch("plex_logic.requests.get", return_value=MagicMock(json=lambda: movies))
+    put = mocker.patch("plex_logic.requests.put", return_value=MagicMock())
+    assert plex_logic._unmonitor_in_automation("radarr", ["11", "12"]) == []
+    assert get.call_count == 1 and get.call_args[0][0] == "http://radarr/api/v3/movie"   # trailing slash trimmed
+    assert sorted(c[0][0] for c in put.call_args_list) == ["http://radarr/api/v3/movie/1", "http://radarr/api/v3/movie/2"]
+    assert all(c[1]["json"]["monitored"] is False for c in put.call_args_list)
+
+
+def test_request_upgrades_reports_every_failure(mock_db, mocker):
+    mocker.patch("plex_logic.get_automation_items", return_value=[{"tmdbId": 11, "id": 5, "monitored": True}])
+    mocker.patch("plex_logic.trigger_radarr_search", return_value=(True, "ok"))
+    mocker.patch("plex_logic.get_setting", return_value=None)   # no profile/folder: untracked items can't be added
+    result = plex_logic.request_upgrades(
+        [{"title": "Tracked", "tmdb_id": 11, "rating_key": "1"}, {"title": "Untracked", "tmdb_id": 22, "rating_key": "2"}], [])
+    assert result["ok"] == 1 and len(result["errors"]) == 1 and "Untracked" in result["errors"][0]
