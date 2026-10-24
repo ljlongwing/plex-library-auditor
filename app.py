@@ -249,8 +249,8 @@ def _apply_rule(df, rule, all_resolutions):
         if not value:
             return df
         watched_keys = get_cached_tautulli_watched(value)
-        if op == "has watched":     return df[df['rating_key'].isin(watched_keys)]
-        elif op == "has not watched": return df[~df['rating_key'].isin(watched_keys)]
+        if op == "has watched":     return plex.filter_by_watched_keys(df, watched_keys, watched=True)
+        elif op == "has not watched": return plex.filter_by_watched_keys(df, watched_keys, watched=False)
 
     return df
 
