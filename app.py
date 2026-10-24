@@ -749,8 +749,7 @@ def render_settings():
                     prof_id = next(p["id"] for p in profiles if p["name"] == sel_prof)
                     plex.save_setting(f"{service_name}_profile", str(prof_id))
                     plex.save_setting(f"{service_name}_folder", sel_fold)
-                    get_radarr_profile_max_res.clear()
-                    get_sonarr_profile_max_res.clear()
+                    get_cached_profile_max_res.clear()
                     st.success("Defaults updated!")
             else:
                 err = configs.get("error")
@@ -830,11 +829,7 @@ def render_settings():
     col_d1, col_d2 = st.columns(2)
     with col_d1:
         st.write(f"**Current Database:** `{os.path.abspath(plex.DB_PATH)}`")
-        new_db_path = st.text_input("Change Database Path", value=plex.DB_PATH, placeholder="cache.sqlite",
-                                    help="Saved to .env as CACHE_DB_PATH. Restart required to take effect.")
-        if st.button("💾 Save Database Path"):
-            plex.save_setting('cache_db_path', new_db_path.strip())
-            st.warning(f"Path saved. Restart the app to switch to `{new_db_path.strip()}`.")
+        st.caption("To use a different file, set the `CACHE_DB_PATH` environment variable and restart.")
 
     with col_d2:
         st.write("**Wipe Cached Data**")
@@ -1075,11 +1070,11 @@ def render_library_audit():
         _upgrade_mask = pd.Series(False, index=filtered_df.index)
         _res_px = filtered_df['resolution'].fillna('').str.lower().map(lambda r: _PLEX_RES_PX.get(r, 0))
         if _radarr_configured:
-            _radarr_max = get_radarr_profile_max_res(plex.get_setting("radarr_profile") or "")
+            _radarr_max = get_cached_profile_max_res("radarr", plex.get_setting("radarr_profile") or "")
             if _radarr_max > 0:
                 _upgrade_mask |= (filtered_df['type'] == 'movie') & (_res_px < _radarr_max)
         if _sonarr_configured:
-            _sonarr_max = get_sonarr_profile_max_res(plex.get_setting("sonarr_profile") or "")
+            _sonarr_max = get_cached_profile_max_res("sonarr", plex.get_setting("sonarr_profile") or "")
             if _sonarr_max > 0:
                 _upgrade_mask |= (filtered_df['type'] == 'show') & (_res_px < _sonarr_max)
         filtered_df = filtered_df[_upgrade_mask]
@@ -1194,8 +1189,8 @@ def render_library_audit():
                 selected_items = display_df.iloc[selected_indices]
 
                 # Determine which selected items can be upgraded via Radarr (movies) or Sonarr (shows)
-                _radarr_max = get_radarr_profile_max_res(plex.get_setting("radarr_profile") or "") if _radarr_configured else 0
-                _sonarr_max = get_sonarr_profile_max_res(plex.get_setting("sonarr_profile") or "") if _sonarr_configured else 0
+                _radarr_max = get_cached_profile_max_res("radarr", plex.get_setting("radarr_profile") or "") if _radarr_configured else 0
+                _sonarr_max = get_cached_profile_max_res("sonarr", plex.get_setting("sonarr_profile") or "") if _sonarr_configured else 0
                 upgradeable_movies = []
                 upgradeable_shows = []
                 _upgrade_skip_reasons = []
@@ -1274,12 +1269,8 @@ def get_cached_sonarr_configs(url="", key=""):
     return plex.get_automation_configs("sonarr")
 
 @st.cache_data(ttl=300)
-def get_radarr_profile_max_res(profile_id=""):
-    return plex.get_radarr_profile_max_resolution(profile_id)
-
-@st.cache_data(ttl=300)
-def get_sonarr_profile_max_res(profile_id=""):
-    return plex.get_sonarr_profile_max_resolution(profile_id)
+def get_cached_profile_max_res(service_type, profile_id=""):
+    return plex.get_profile_max_resolution(service_type, profile_id)
 
 @st.cache_data
 def _cached_load_library(cache_key: str):

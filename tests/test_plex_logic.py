@@ -488,8 +488,34 @@ def test_unmonitor_fetches_list_once_and_unmonitors_matches(mock_db, mocker):
 
 def test_request_upgrades_reports_every_failure(mock_db, mocker):
     mocker.patch("plex_logic.get_automation_items", return_value=[{"tmdbId": 11, "id": 5, "monitored": True}])
-    mocker.patch("plex_logic.trigger_radarr_search", return_value=(True, "ok"))
+    mocker.patch("plex_logic.trigger_search", return_value=(True, "ok"))
     mocker.patch("plex_logic.get_setting", return_value=None)   # no profile/folder: untracked items can't be added
     result = plex_logic.request_upgrades(
         [{"title": "Tracked", "tmdb_id": 11, "rating_key": "1"}, {"title": "Untracked", "tmdb_id": 22, "rating_key": "2"}], [])
     assert result["ok"] == 1 and len(result["errors"]) == 1 and "Untracked" in result["errors"][0]
+
+
+def test_profile_max_resolution_handles_groups_and_disallowed(mocker):
+    profile = {"items": [
+        {"allowed": True, "quality": {"resolution": 720}},
+        {"allowed": True, "items": [                                   # a quality group
+            {"allowed": True, "quality": {"resolution": 1080}},
+            {"allowed": False, "quality": {"resolution": 2160}}]},     # disallowed inside the group
+        {"allowed": False, "quality": {"resolution": 4320}},           # disallowed outright
+    ]}
+    mocker.patch("plex_logic.get_setting", side_effect=lambda k: {"sonarr_url": "http://s/", "sonarr_api_key": "k"}.get(k))
+    get = mocker.patch("plex_logic.requests.get", return_value=MagicMock(status_code=200, json=lambda: profile))
+    assert plex_logic.get_profile_max_resolution("sonarr", "4") == 1080
+    assert get.call_args[0][0] == "http://s/api/v3/qualityprofile/4"
+
+
+def test_cache_row_reads_guid_ids_and_last_duplicate_wins():
+    import xml.etree.ElementTree as ET
+    item = MagicMock(ratingKey=7, guid="plex://show/x", title="Show", addedAt=None, thumbUrl="",
+                     originallyAvailableAt=None, contentRating="TV-PG")
+    item._data = ET.fromstring('<Directory><Guid id="imdb://tt1"/><Guid id="tmdb://100"/>'
+                               '<Guid id="tvdb://111"/><Guid id="tvdb://222"/></Directory>')
+    row = plex_logic._cache_row(item, "show", "TV", "m", {"7": ["Faves"]}, {"100": "tv_100"},
+                                last_watched=None, viewed_count=0, leaf_count=3, size_bytes=1,
+                                latest_added_at=None, resolution="1080")
+    assert (row["tmdb_id"], row["tvdb_id"], row["tmdb_collection_id"], row["collections"]) == ("100", "222", "tv_100", "Faves")
