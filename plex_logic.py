@@ -655,7 +655,7 @@ def _cache_row(item, type_, section_title, machine_id, collection_map, existing_
     ids = {}
     for guid_elem in item._data.findall('Guid'):
         scheme, _, value = guid_elem.get('id', '').partition('://')
-        ids[scheme] = value  # some items carry two ids of one kind; the last one wins, as it always has
+        ids.setdefault(scheme, value)  # some items carry two ids of one kind; the first is the real match (checked against TMDB)
     tmdb_id = ids.get('tmdb')
     return {
         'rating_key': item.ratingKey,

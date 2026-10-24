@@ -509,7 +509,7 @@ def test_profile_max_resolution_handles_groups_and_disallowed(mocker):
     assert get.call_args[0][0] == "http://s/api/v3/qualityprofile/4"
 
 
-def test_cache_row_reads_guid_ids_and_last_duplicate_wins():
+def test_cache_row_reads_guid_ids_and_first_duplicate_wins():
     import xml.etree.ElementTree as ET
     item = MagicMock(ratingKey=7, guid="plex://show/x", title="Show", addedAt=None, thumbUrl="",
                      originallyAvailableAt=None, contentRating="TV-PG")
@@ -518,4 +518,4 @@ def test_cache_row_reads_guid_ids_and_last_duplicate_wins():
     row = plex_logic._cache_row(item, "show", "TV", "m", {"7": ["Faves"]}, {"100": "tv_100"},
                                 last_watched=None, viewed_count=0, leaf_count=3, size_bytes=1,
                                 latest_added_at=None, resolution="1080")
-    assert (row["tmdb_id"], row["tvdb_id"], row["tmdb_collection_id"], row["collections"]) == ("100", "222", "tv_100", "Faves")
+    assert (row["tmdb_id"], row["tvdb_id"], row["tmdb_collection_id"], row["collections"]) == ("100", "111", "tv_100", "Faves")
