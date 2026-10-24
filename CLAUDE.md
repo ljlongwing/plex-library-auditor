@@ -38,7 +38,7 @@ State is managed via `st.session_state` (tokens, refresh status, pending deletio
 SQLite at `cache.sqlite` (path configurable via settings). Three tables:
 - **`library_cache`** — One row per Plex item. Key columns: `guid` (PK), `rating_key`, `type`, `library`, `last_watched_at`, `size_bytes`, `tmdb_id`, `tmdb_collection_id`, `tvdb_id`.
 - **`series_cache`** — One row per collection/series. `parts` is JSON-serialized. `collection_id` uses prefix convention: `movie_{tmdb_collection_id}` for movies, `tv_{tmdb_id}` for shows.
-- **`settings`** — Key/value store for all user configuration. Settings are also written to `.env` so the app can reconnect headlessly on restart.
+- **`settings`** — Key/value store for all user configuration. Environment variables (see `.env.example`) are used only for keys that have no saved row. The database path itself comes only from `CACHE_DB_PATH`.
 
 `init_db()` in `plex_logic.py` handles schema migrations with `ALTER TABLE` guards.
 

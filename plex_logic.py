@@ -402,10 +402,10 @@ def check_automation_status(external_id, service_type, all_items):
     
     return "Not Tracked"
 
-def get_radarr_profile_max_resolution(profile_id):
-    """Returns the max resolution (px) the given Radarr quality profile allows, e.g. 1080 or 2160."""
-    url = get_setting("radarr_url")
-    api_key = get_setting("radarr_api_key")
+def get_profile_max_resolution(service_type, profile_id):
+    """Max resolution (px, e.g. 1080 or 2160) a Radarr or Sonarr quality profile allows; 0 if unknown."""
+    url = get_setting(f"{service_type}_url")
+    api_key = get_setting(f"{service_type}_api_key")
     if not url or not api_key or not profile_id:
         return 0
     try:
@@ -413,91 +413,36 @@ def get_radarr_profile_max_resolution(profile_id):
                            headers={"X-Api-Key": api_key}, timeout=10)
         if res.status_code != 200:
             return 0
-        profile = res.json()
         max_res = 0
-        for item in profile.get("items", []):
+        for item in res.json().get("items", []):
             if not item.get("allowed"):
                 continue
-            sub_items = item.get("items") or []
-            if sub_items:
-                # Group: items are nested one level deeper, each with a "quality" key
-                for sub in sub_items:
-                    if sub.get("allowed") is not False:
-                        max_res = max(max_res, sub.get("quality", {}).get("resolution", 0))
-            else:
-                max_res = max(max_res, item.get("quality", {}).get("resolution", 0))
+            # A group nests its qualities one level deeper, each with a "quality" key
+            for q in (item.get("items") or [item]):
+                if q.get("allowed") is not False:
+                    max_res = max(max_res, q.get("quality", {}).get("resolution", 0))
         return max_res
     except Exception:
         return 0
 
-def trigger_radarr_search(tmdb_id, all_radarr_items):
-    """Triggers a Radarr upgrade search for a movie already tracked in Radarr."""
-    url = get_setting("radarr_url")
-    api_key = get_setting("radarr_api_key")
+def trigger_search(service_type, external_id, all_items):
+    """Ask Radarr (TMDB id) or Sonarr (TVDB id) to search again for an item it already tracks."""
+    url = get_setting(f"{service_type}_url")
+    api_key = get_setting(f"{service_type}_api_key")
+    name = service_type.capitalize()
     if not url or not api_key:
-        return False, "Radarr not configured"
-    match = next((i for i in all_radarr_items if str(i.get('tmdbId')) == str(tmdb_id)), None)
+        return False, f"{name} not configured"
+    id_field = "tmdbId" if service_type == "radarr" else "tvdbId"
+    match = next((i for i in all_items if str(i.get(id_field)) == str(external_id)), None)
     if not match:
-        return False, "Movie not found in Radarr"
+        return False, f"{'Movie' if service_type == 'radarr' else 'Series'} not found in {name}"
+    command = ({"name": "MoviesSearch", "movieIds": [match["id"]]} if service_type == "radarr"
+               else {"name": "SeriesSearch", "seriesId": match["id"]})
     try:
-        res = requests.post(
-            f"{url.rstrip('/')}/api/v3/command",
-            headers={"X-Api-Key": api_key},
-            json={"name": "MoviesSearch", "movieIds": [match["id"]]},
-            timeout=10
-        )
+        res = requests.post(f"{url.rstrip('/')}/api/v3/command", headers={"X-Api-Key": api_key}, json=command, timeout=10)
         if res.status_code in [200, 201, 202]:
             return True, "Upgrade search triggered"
-        return False, f"Radarr HTTP {res.status_code}: {res.text}"
-    except Exception as e:
-        return False, str(e)
-
-def get_sonarr_profile_max_resolution(profile_id):
-    """Returns the max resolution (px) the given Sonarr quality profile allows, e.g. 1080 or 2160."""
-    url = get_setting("sonarr_url")
-    api_key = get_setting("sonarr_api_key")
-    if not url or not api_key or not profile_id:
-        return 0
-    try:
-        res = requests.get(f"{url.rstrip('/')}/api/v3/qualityprofile/{profile_id}",
-                           headers={"X-Api-Key": api_key}, timeout=10)
-        if res.status_code != 200:
-            return 0
-        profile = res.json()
-        max_res = 0
-        for item in profile.get("items", []):
-            if not item.get("allowed"):
-                continue
-            sub_items = item.get("items") or []
-            if sub_items:
-                for sub in sub_items:
-                    if sub.get("allowed") is not False:
-                        max_res = max(max_res, sub.get("quality", {}).get("resolution", 0))
-            else:
-                max_res = max(max_res, item.get("quality", {}).get("resolution", 0))
-        return max_res
-    except Exception:
-        return 0
-
-def trigger_sonarr_search(tvdb_id, all_sonarr_items):
-    """Triggers a Sonarr upgrade search for a series already tracked in Sonarr."""
-    url = get_setting("sonarr_url")
-    api_key = get_setting("sonarr_api_key")
-    if not url or not api_key:
-        return False, "Sonarr not configured"
-    match = next((i for i in all_sonarr_items if str(i.get('tvdbId')) == str(tvdb_id)), None)
-    if not match:
-        return False, "Series not found in Sonarr"
-    try:
-        res = requests.post(
-            f"{url.rstrip('/')}/api/v3/command",
-            headers={"X-Api-Key": api_key},
-            json={"name": "SeriesSearch", "seriesId": match["id"]},
-            timeout=10
-        )
-        if res.status_code in [200, 201, 202]:
-            return True, "Upgrade search triggered"
-        return False, f"Sonarr HTTP {res.status_code}: {res.text}"
+        return False, f"{name} HTTP {res.status_code}: {res.text}"
     except Exception as e:
         return False, str(e)
 
@@ -699,36 +644,40 @@ def process_movie_item(item, global_history, collection_map, machine_id, section
             (getattr(item, 'viewedLeafCount', 0) or 0) > 0):
         viewed_count = 1
 
-    tmdb_id = None
-    tvdb_id = None
-    for guid_elem in item._data.findall('Guid'):
-        guid_id = guid_elem.get('id', '')
-        if 'tmdb://' in guid_id:
-            tmdb_id = guid_id.split('tmdb://')[-1]
-        if 'tvdb://' in guid_id:
-            tvdb_id = guid_id.split('tvdb://')[-1]
+    return _cache_row(item, 'movie', section_title, machine_id, collection_map, existing_mappings,
+                      last_watched=last_watched, viewed_count=viewed_count, leaf_count=1, size_bytes=size_bytes,
+                      latest_added_at=item.addedAt, resolution=resolution)
 
+
+def _cache_row(item, type_, section_title, machine_id, collection_map, existing_mappings, *,
+               last_watched, viewed_count, leaf_count, size_bytes, latest_added_at, resolution):
+    """One library_cache row for a movie or show, including its TMDB/TVDB ids from Plex's Guid tags."""
+    ids = {}
+    for guid_elem in item._data.findall('Guid'):
+        scheme, _, value = guid_elem.get('id', '').partition('://')
+        ids[scheme] = value  # some items carry two ids of one kind; the last one wins, as it always has
+    tmdb_id = ids.get('tmdb')
     return {
-        'guid': item.guid,
         'rating_key': item.ratingKey,
+        'guid': item.guid,
         'title': item.title,
-        'type': 'movie',
+        'type': type_,
         'library': section_title,
         'added_at': item.addedAt,
         'last_watched_at': last_watched,
         'thumb_url': item.thumbUrl,
         'viewed_leaf_count': viewed_count,
-        'leaf_count': 1,
+        'leaf_count': leaf_count,
         'server_id': machine_id,
         'size_bytes': size_bytes,
-        'latest_added_at': item.addedAt,
-        'collections': ", ".join(collection_map.get(rk, [])),
+        'latest_added_at': latest_added_at,
+        'collections': ", ".join(collection_map.get(str(item.ratingKey), [])),
         'release_date': item.originallyAvailableAt,
         'resolution': resolution,
         'content_rating': item.contentRating,
         'tmdb_id': tmdb_id,
         'tmdb_collection_id': existing_mappings.get(tmdb_id),
-        'tvdb_id': tvdb_id,
+        'tvdb_id': ids.get('tvdb'),
     }
 
 
@@ -846,39 +795,10 @@ def fetch_and_cache_data(plex_url, plex_token, progress_callback=None):
                         print(f"Error processing show '{item.title}': {e}")
                         viewed_count, leaf_count, size_bytes, latest_added_at, resolution, last_watched = 0, 0, 0, item.addedAt, "", item.lastViewedAt
 
-                    collections = ", ".join(collection_map.get(str(item.ratingKey), []))
-                    
-                    tmdb_id = None
-                    tvdb_id = None
-                    for guid_elem in item._data.findall('Guid'):
-                        guid_id = guid_elem.get('id', '')
-                        if 'tmdb://' in guid_id:
-                            tmdb_id = guid_id.split('tmdb://')[-1]
-                        if 'tvdb://' in guid_id:
-                            tvdb_id = guid_id.split('tvdb://')[-1]
-
-                    all_data.append({
-                        'guid': item.guid,
-                        'rating_key': item.ratingKey,
-                        'title': item.title,
-                        'type': section.type,
-                        'library': section.title,
-                        'added_at': item.addedAt,
-                        'last_watched_at': last_watched,
-                        'thumb_url': item.thumbUrl,
-                        'viewed_leaf_count': viewed_count,
-                        'leaf_count': leaf_count,
-                        'server_id': machine_id,
-                        'size_bytes': size_bytes,
-                        'latest_added_at': latest_added_at,
-                        'collections': collections,
-                        'release_date': item.originallyAvailableAt,
-                        'resolution': resolution,
-                        'content_rating': item.contentRating,
-                        'tmdb_id': tmdb_id,
-                        'tmdb_collection_id': existing_mappings.get(tmdb_id),
-                        'tvdb_id': tvdb_id
-                    })
+                    all_data.append(_cache_row(
+                        item, section.type, section.title, machine_id, collection_map, existing_mappings,
+                        last_watched=last_watched, viewed_count=viewed_count, leaf_count=leaf_count,
+                        size_bytes=size_bytes, latest_added_at=latest_added_at, resolution=resolution))
         else:
             with ThreadPoolExecutor(max_workers=10) as executor:
                 future_to_item = {
@@ -1057,8 +977,7 @@ def request_upgrades(movies, shows, progress_callback=None):
         ext_id = item[id_key]
         status = check_automation_status(ext_id, svc, tracked[svc])
         if status in ("Downloaded", "Monitored", "Tracked (Not Monitored)"):
-            search = trigger_radarr_search if svc == "radarr" else trigger_sonarr_search
-            ok, msg = search(ext_id, tracked[svc])
+            ok, msg = trigger_search(svc, ext_id, tracked[svc])
         else:
             profile, folder = get_setting(f"{svc}_profile"), get_setting(f"{svc}_folder")
             if profile and folder:
@@ -1255,7 +1174,10 @@ def get_series_audit_data():
     
     audit_results = []
     collections_to_delete = []
-    
+    # One lookup instead of filtering the whole library once per collection part (this runs on every click)
+    owned_ids = set(library_df['tmdb_id'].dropna().astype(str))
+    by_tmdb = library_df.dropna(subset=['tmdb_id']).drop_duplicates('tmdb_id').set_index('tmdb_id')
+
     for _, series in series_df.iterrows():
         try:
             parts = json.loads(series['parts'])
@@ -1265,15 +1187,14 @@ def get_series_audit_data():
         
         # Determine if we own ANY parts of this series by checking tmdb_id against library_df
         part_ids = [str(p['id']) for p in parts]
-        owned_matches = library_df[library_df['tmdb_id'].isin(part_ids)]
-        
+
         # If we own ZERO items from this series, it shouldn't be in our audit list
-        if owned_matches.empty:
+        if not owned_ids.intersection(part_ids):
             # For TV shows, the collection_id is just "tv_{tmdb_id}", 
             # so we check if that specific show is still in the library
             if series['collection_id'].startswith('tv_'):
                 show_tmdb_id = series['collection_id'].split('tv_')[-1]
-                if library_df[library_df['tmdb_id'] == show_tmdb_id].empty:
+                if show_tmdb_id not in owned_ids:
                     collections_to_delete.append(series['collection_id'])
                     continue
             else:
@@ -1285,8 +1206,7 @@ def get_series_audit_data():
         
         for part in parts:
             p_id = str(part['id'])
-            match = library_df[library_df['tmdb_id'] == p_id]
-            is_owned = not match.empty
+            is_owned = p_id in owned_ids
             
             item_data = {
                 'title': part.get('title', part.get('name', 'Unknown')),
@@ -1300,7 +1220,7 @@ def get_series_audit_data():
             
             if is_owned:
                 owned_count += 1
-                item_row = match.iloc[0]
+                item_row = by_tmdb.loc[p_id]
                 item_data['rating_key'] = item_row['rating_key']
                 item_data['server_id'] = item_row['server_id']
                 item_data['last_watched_at'] = item_row['last_watched_at']
@@ -1479,7 +1399,7 @@ def get_tautulli_global_history(url=None, api_key=None):
                 ts = r.get("date")
                 if not rk or not ts:
                     continue
-                dt = datetime.utcfromtimestamp(ts)
+                dt = datetime.fromtimestamp(ts)  # local time, like plexapi's own timestamps
                 if rk not in history or dt > history[rk]:
                     history[rk] = dt
             return history
