@@ -185,23 +185,45 @@ def get_client_id():
     conn.close()
     return client_id
 
+# rating_key is the key: guid is not unique (the same movie in two libraries shares a guid).
+# Keys are TEXT because Tautulli, the upgrade queue and URLs all handle them as text.
+LIBRARY_CACHE_COLUMNS = [
+    ("rating_key", "TEXT PRIMARY KEY"), ("guid", "TEXT"), ("title", "TEXT"), ("type", "TEXT"),
+    ("library", "TEXT"), ("added_at", "DATETIME"), ("last_watched_at", "DATETIME"), ("thumb_url", "TEXT"),
+    ("viewed_leaf_count", "INTEGER"), ("leaf_count", "INTEGER"), ("server_id", "TEXT"),
+    ("size_bytes", "INTEGER"), ("latest_added_at", "DATETIME"), ("collections", "TEXT"),
+    ("release_date", "DATETIME"), ("resolution", "TEXT"), ("content_rating", "TEXT"),
+    ("tmdb_id", "TEXT"), ("tmdb_collection_id", "TEXT"), ("tvdb_id", "TEXT"),
+]
+_LIBRARY_CACHE_DDL = "CREATE TABLE IF NOT EXISTS library_cache (" + ", ".join(f"{n} {t}" for n, t in LIBRARY_CACHE_COLUMNS) + ")"
+
+def _repair_library_cache(conn):
+    """Older refreshes let pandas recreate library_cache: no primary key, no index, integer keys.
+    Rebuild it once with the proper schema, keeping the rows."""
+    info = conn.execute("PRAGMA table_info(library_cache)").fetchall()
+    if any(row[5] and row[1] == "rating_key" for row in info):  # already keyed on rating_key
+        return
+    existing = {row[1] for row in info}
+    names = [n for n, _ in LIBRARY_CACHE_COLUMNS]
+    select = ", ".join(
+        "CAST(rating_key AS TEXT)" if n == "rating_key" else (n if n in existing else "NULL") for n in names)
+    conn.executescript(f"""
+        BEGIN;
+        ALTER TABLE library_cache RENAME TO library_cache_old;
+        {_LIBRARY_CACHE_DDL};
+        INSERT OR IGNORE INTO library_cache ({", ".join(names)}) SELECT {select} FROM library_cache_old;
+        DROP TABLE library_cache_old;
+        COMMIT;
+    """)
+
 def init_db():
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     # Table for metadata
-    c.execute('''CREATE TABLE IF NOT EXISTS library_cache
-                 (guid TEXT PRIMARY KEY, rating_key TEXT, title TEXT, type TEXT, library TEXT,
-                  added_at DATETIME, last_watched_at DATETIME, thumb_url TEXT,
-                  viewed_leaf_count INTEGER, leaf_count INTEGER, server_id TEXT,
-                  size_bytes INTEGER, latest_added_at DATETIME, collections TEXT,
-                  release_date DATETIME, resolution TEXT, content_rating TEXT,
-                  tmdb_id TEXT, tmdb_collection_id TEXT, tvdb_id TEXT)''')
-    
-    # Check for missing columns (Schema updates)
-    c.execute("PRAGMA table_info(library_cache)")
-    lib_columns = [row[1] for row in c.fetchall()]
-    if 'tvdb_id' not in lib_columns:
-        c.execute("ALTER TABLE library_cache ADD COLUMN tvdb_id TEXT")
+    c.execute(_LIBRARY_CACHE_DDL)
+    conn.commit()
+    _repair_library_cache(conn)
+    c.execute("CREATE INDEX IF NOT EXISTS idx_library_cache_tmdb_id ON library_cache (tmdb_id)")
 
     # Table for series/collections from TMDB
     c.execute('''CREATE TABLE IF NOT EXISTS series_cache
@@ -546,8 +568,9 @@ def get_setting(key):
     c.execute("SELECT value FROM settings WHERE key = ?", (key,))
     row = c.fetchone()
     conn.close()
-    if row and row[0]:
-        return row[0]
+    if row:
+        # A saved empty value (e.g. after Logout) wins over the env var, or logout could never stick
+        return row[0] or None
     return os.environ.get(key.upper())
 
 def start_plex_auth():
@@ -876,22 +899,7 @@ def fetch_and_cache_data(plex_url, plex_token, progress_callback=None):
         progress_callback("Done", 1.0)
 
     df = pd.DataFrame(all_data)
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-
-    if not df.empty:
-        # Write to staging first — if this fails, old data in library_cache is preserved
-        df.to_sql('library_cache_staging', conn, if_exists='replace', index=False)
-        # Atomic swap: only drop old data after new data is ready
-        c.execute("DROP TABLE IF EXISTS library_cache")
-        c.execute("ALTER TABLE library_cache_staging RENAME TO library_cache")
-    else:
-        c.execute("DELETE FROM library_cache")
-    conn.commit()
-    conn.close()
-
-    # Ensure schema is current (adds any new columns added in migrations)
-    init_db()
+    replace_library_cache(df)
 
     save_setting('last_refreshed_at', datetime.now(timezone.utc).isoformat())
 
@@ -910,6 +918,24 @@ def fetch_and_cache_data(plex_url, plex_token, progress_callback=None):
             _recently_deleted_keys.difference_update(set(keys))
 
     return df
+
+def replace_library_cache(df):
+    """Swap in a freshly fetched library. All or nothing: readers see the old rows or the new ones."""
+    if df.empty:
+        # An empty result is almost always Plex being unavailable, not an empty server.
+        # Wiping here would also make the Series Auditor drop every series. Use "Wipe Local Cache" to clear.
+        raise RuntimeError("Plex returned no movies or shows, so the existing cache was kept. "
+                           "Check that the server and its libraries are online, then refresh again.")
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        conn.execute("DELETE FROM library_cache")
+        df.to_sql('library_cache', conn, if_exists='append', index=False)  # commits the DELETE with it
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
 
 def load_cached_data():
     conn = sqlite3.connect(DB_PATH)
@@ -1267,8 +1293,8 @@ def get_series_audit_data():
             'parts': all_parts
         })
     
-    # Perform cleanup of dead series
-    if collections_to_delete:
+    # Perform cleanup of dead series (never against an empty library: that means no data, not no series)
+    if collections_to_delete and not library_df.empty:
         c = conn.cursor()
         placeholders = ', '.join(['?'] * len(collections_to_delete))
         c.execute(f"DELETE FROM series_cache WHERE collection_id IN ({placeholders})", collections_to_delete)
@@ -1427,6 +1453,12 @@ def get_tautulli_global_history(url=None, api_key=None):
         print(f"Tautulli error fetching global history: {e}")
     return {}
 
+def filter_by_watched_keys(df, watched_keys, watched=True):
+    """Rows whose rating_key is (watched=True) or isn't in watched_keys. Compared as text,
+    since keys arrive as numbers or strings depending on the source."""
+    hit = df['rating_key'].astype(str).isin(watched_keys)
+    return df[hit] if watched else df[~hit]
+
 def get_tautulli_watched_keys(user_id, url=None, api_key=None):
     url = url or get_setting("tautulli_url")
     api_key = api_key or get_setting("tautulli_api_key")
@@ -1435,12 +1467,13 @@ def get_tautulli_watched_keys(user_id, url=None, api_key=None):
     try:
         res = requests.get(
             f"{url}/api/v2",
-            params={"apikey": api_key, "cmd": "get_history", "user_id": user_id, "length": 10000},
-            timeout=15
+            params={"apikey": api_key, "cmd": "get_history", "user_id": user_id, "length": 100000},
+            timeout=30
         )
         if res.status_code == 200:
             rows = res.json().get("response", {}).get("data", {}).get("data", [])
-            return frozenset(str(r["rating_key"]) for r in rows if r.get("rating_key"))
+            # Episode plays carry the show's key as grandparent_rating_key; the library lists shows, not episodes
+            return frozenset(str(r[k]) for r in rows for k in ("rating_key", "grandparent_rating_key") if r.get(k))
     except Exception as e:
         print(f"Tautulli error fetching history: {e}")
     return frozenset()

@@ -1,4 +1,5 @@
 import pytest
+import pandas as pd
 import time
 import plex_logic
 import sqlite3
@@ -341,3 +342,82 @@ def test_background_series_scan_reports_completion(mock_db, mocker):
     state = plex_logic.get_scan_state()
     assert state["done"] and not state["running"] and state["error"] is None
     plex_logic.clear_scan_done()
+
+
+# --- data correctness ---
+
+def _rows(n, start=1):
+    return pd.DataFrame([{
+        'rating_key': start + i, 'guid': 'plex://movie/same' if i < 2 else f'plex://movie/{i}',
+        'title': f'Movie {i}', 'type': 'movie', 'library': 'Movies', 'tmdb_id': str(500 + i),
+    } for i in range(n)])
+
+
+def test_replace_library_cache_keeps_schema_and_text_keys(mock_db):
+    # Two rows share a guid (same movie in two libraries): must not break the refresh
+    plex_logic.replace_library_cache(_rows(3))
+    plex_logic.replace_library_cache(_rows(2, start=10))
+    conn = sqlite3.connect(mock_db)
+    keys = conn.execute("SELECT rating_key, typeof(rating_key) FROM library_cache ORDER BY rating_key").fetchall()
+    pk = [r[1] for r in conn.execute("PRAGMA table_info(library_cache)") if r[5]]
+    conn.close()
+    assert keys == [("10", "text"), ("11", "text")]   # old rows replaced, keys stored as text
+    assert pk == ["rating_key"]                        # table kept its primary key
+
+
+def test_replace_library_cache_refuses_empty_and_keeps_old_rows(mock_db):
+    plex_logic.replace_library_cache(_rows(3))
+    with pytest.raises(RuntimeError):
+        plex_logic.replace_library_cache(pd.DataFrame())
+    conn = sqlite3.connect(mock_db)
+    assert conn.execute("SELECT COUNT(*) FROM library_cache").fetchone()[0] == 3
+    conn.close()
+
+
+def test_refresh_with_no_plex_libraries_keeps_cache(mock_db, mocker):
+    plex_logic.replace_library_cache(_rows(3))
+    server = MagicMock()
+    server.history.return_value = []
+    server.library.sections.return_value = []
+    mocker.patch("plex_logic.PlexServer", return_value=server)
+    mocker.patch("plex_logic.get_setting", return_value=None)
+    with pytest.raises(RuntimeError):
+        plex_logic.fetch_and_cache_data("http://plex:32400", "token")
+    conn = sqlite3.connect(mock_db)
+    assert conn.execute("SELECT COUNT(*) FROM library_cache").fetchone()[0] == 3
+    conn.close()
+
+
+def test_init_db_repairs_table_made_by_old_refresh(tmp_path, monkeypatch):
+    db = tmp_path / "old.sqlite"
+    conn = sqlite3.connect(db)
+    # What older versions left behind: pandas-made table, no primary key, integer keys
+    _rows(2).to_sql("library_cache", conn, index=False)
+    conn.close()
+    monkeypatch.setattr(plex_logic, "DB_PATH", str(db))
+    plex_logic.init_db()
+    conn = sqlite3.connect(db)
+    keys = conn.execute("SELECT rating_key, typeof(rating_key) FROM library_cache ORDER BY rating_key").fetchall()
+    pk = [r[1] for r in conn.execute("PRAGMA table_info(library_cache)") if r[5]]
+    conn.close()
+    assert keys == [("1", "text"), ("2", "text")]
+    assert pk == ["rating_key"]
+
+
+def test_watched_by_user_matches_numeric_keys_and_shows(mocker):
+    history = {"response": {"data": {"data": [
+        {"rating_key": 9001, "grandparent_rating_key": 300},   # an episode of show 300
+        {"rating_key": 101, "grandparent_rating_key": ""},     # a movie
+    ]}}}
+    mocker.patch("plex_logic.requests.get", return_value=MagicMock(status_code=200, json=lambda: history))
+    keys = plex_logic.get_tautulli_watched_keys("7", url="http://tautulli", api_key="k")
+    library = pd.DataFrame({"rating_key": [101, 300, 555], "title": ["Movie", "Show", "Unwatched"]})
+    assert set(plex_logic.filter_by_watched_keys(library, keys, watched=True)["title"]) == {"Movie", "Show"}
+    assert set(plex_logic.filter_by_watched_keys(library, keys, watched=False)["title"]) == {"Unwatched"}
+
+
+def test_logout_beats_env_token(mock_db, monkeypatch):
+    monkeypatch.setenv("PLEX_TOKEN", "from-env")
+    assert plex_logic.get_setting("plex_token") == "from-env"   # nothing saved: env is the fallback
+    plex_logic.save_setting("plex_token", None)                  # Logout
+    assert plex_logic.get_setting("plex_token") is None
